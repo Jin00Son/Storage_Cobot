@@ -1,0 +1,4 @@
+int32 part_id
+---
+bool accepted
+string message

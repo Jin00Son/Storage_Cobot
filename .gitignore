@@ -1,0 +1,43 @@
+# ROS 2 colcon build artifacts
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# ROS generated
+*.bag
+*.bag.active
+*.bag.metadata.yaml
+
+# Large data (customize)
+data/
+datasets/
+*.csv
+*.zip
+*.tar
+*.tar.gz
+*.pth
+*.onnx
+EOF
