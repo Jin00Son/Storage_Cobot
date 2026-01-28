@@ -58,6 +58,7 @@ Hardware: Elephant Robotics pymycobot280, mount camera
   3. 창고 Section 나누고 해당 section에 물체가 이미 있으면 위치 살짝 다르게 두는 알고리즘
   4. 같은 id 부품 여러개 들어왔을 때 구분하는 알고리즘
   5. 배포용 rosdep key, package.xml 파일에 작성
+  6. Service로 Maual/Auto 모드 전환 기능
 
 - Optional
   1. jetcobot camera calibration 재측정
