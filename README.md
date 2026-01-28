@@ -21,7 +21,10 @@ Hardware: Elephant Robotics pymycobot280, mount camera
 
 ## 주요 기능
 1. 관측 영역에서의 부품들을 내부 DB에 기록 및 DB topic 발행
-2. 관측되는 부품 중 하나 선정 후 pick하고 지정된 부품 창고 자리에 place
+
+2. 관측되는 여러 부품 중 선별하여 부품 하나 선정
+
+3. 선정된 부품을 pick하여 부품이 속한 창고 위치에 place
 
 
 ## 노드 구성 및 기능
@@ -46,6 +49,8 @@ Hardware: Elephant Robotics pymycobot280, mount camera
 1. 하드웨어 한계
 - Manipulator Backlash, send_coords 부정확 >> send_angles로 대체 방안
 - 저품질 Camera, marker 위치 추정 정확도 감소
+2. 소프트웨어 한계
+- pymycobot API로는 path planning 제약 있음 (로봇이 지나가는 경로의 장애물 / 위치 회피 X)
 
 ## 수정 및 개선 사항
 - Required
