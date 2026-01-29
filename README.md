@@ -51,6 +51,7 @@ Hardware: Elephant Robotics pymycobot280, mount camera
 - 저품질 Camera, marker 위치 추정 정확도 감소
 2. 소프트웨어 한계
 - pymycobot API로는 path planning 제약 있음 (로봇이 지나가는 경로의 장애물 / 위치 회피 X)
+- FeedBack 실패 판단 기능 부재 (모터 드라이버 접근 권한이 제한되어 있어 실시간 로봇의 위치 판단 X)
 
 ## 수정 및 개선 사항
 - Required
@@ -58,7 +59,7 @@ Hardware: Elephant Robotics pymycobot280, mount camera
   3. 창고 Section 나누고 해당 section에 물체가 이미 있으면 위치 살짝 다르게 두는 알고리즘
   4. 같은 id 부품 여러개 들어왔을 때 구분하는 알고리즘
   5. 배포용 rosdep key, package.xml 파일에 작성
-  6. Service로 Maual/Auto 모드 전환 기능
+  7. Service로 Maual/Auto 모드 전환 기능
 
 - Optional
   1. jetcobot camera calibration 재측정
