@@ -29,7 +29,7 @@ Hardware: Elephant Robotics pymycobot280, mount camera
 
 ## 노드 구성 및 기능
 - 📷 **Camera Node**
-  - Aruco 마커 좌표 Cobot base 기준 좌표 추정
+  - Aruco 마커 Cobot base 기준 좌표 추정
   - 위치 변화량 기반 부품 정지 상태 판단
   - 여러 부품 위치, id, 정지 상태, 정지 시간 정보를 묶어서 topic 발행
  
