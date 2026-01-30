@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import time
 import rclpy as rp
+import math
+import numpy as np
 from rclpy.node import Node
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 
@@ -9,7 +11,9 @@ from jetcobot_interfaces.action import PickAndPlace
 from pymycobot.mycobot280 import MyCobot280
 
 from jetcobot_pkg.utils.cobot_utils import(
-    coords_replace_z
+    coords_replace_z,
+    rotmat_to_euler_intrinsic_ZYX_deg,
+    gripper_goal_to_ee_cmd_coords_mm_deg
 )
 
 # =========================
@@ -46,7 +50,15 @@ PICK_Z_MM = 110.0
 PLACE_Z_MM = 120.0
 
 # 실제 오차값 
-SELF_OFFSET_X = -15.0
+SELF_OFFSET_X = -10.0
+
+# 로봇 위치 판단 허용 오차값
+POS_FLAG_THRESH = 30.0
+
+# end effector 기준 그리퍼 offset
+GRIPPER_Z_OFFSET_DEG = -45.0
+GRIPPER_Y_OFFSET_MM = -10.0
+GRIPPER_Z_OFFSET_MM = 100.0
 
 
 # =========================
@@ -81,7 +93,7 @@ class JetcobotRobotActionServer(Node):
             cancel_callback=self.cancel_cb,
         )
 
-        self.get_logger().info("✅ Robot Action Server started (with is_in_position checking)")
+        self.get_logger().info("✅ Robot Action Server started (with is_moving checking)")
         self.get_logger().info(f"- action name: {ACTION_NAME}")
         self.get_logger().info(f"- port: {MYCOBOT_PORT} baud:{MYCOBOT_BAUD}")
     
@@ -125,21 +137,72 @@ class JetcobotRobotActionServer(Node):
             if goal_handle.is_cancel_requested:
                 return False, "CANCEL"
 
-            ok_flag = self.mc.is_moving()  # 1:true, 0:false, -1:error
-            print(ok_flag)
+            done_flag = self.mc.is_moving()  # 1:true, 0:false, -1:error    
+            current_coords = self.mc.get_coords()
+            pos_flag = 1
+            for i in range(0,3):
+                if abs(target_coords[i] - current_coords[i]) > POS_FLAG_THRESH: # 로봇 translation 위치만 확인 (회전X -> 특이점 발생)
+                    pos_flag = 0
+                    # print("value is over Thresh index:",i,", value", target_coords[i] - current_coords[i])
 
-            if ok_flag == 0:
+            if done_flag == 0 and pos_flag == 1:
                 return True, "REACHED"
 
-            if ok_flag == -1:
+            if done_flag == -1:
                 return False, "ERROR"
 
             if time.time() - t0 > timeout_sec:
-                return False, "TIMEOUT"
+                return False, "TIMEOUT. Robot Cannot Find IK Solution. Returning to Home Position"
 
             time.sleep(POLL_DT)
 
         return False, "ROS_NOT_OK"
+
+    def sendcoords_flip_z(self, coords_mm_deg) -> np.ndarray:
+        """
+        입력: send_coords 형식 [x,y,z,rx,ry,rz] (mm, deg)
+        - rx,ry,rz 는 intrinsic ZYX euler (deg) 로 해석
+        출력: 3x3 Rotation matrix (np.float64)
+
+        정의:
+        R = Rz(rz) * Ry(ry) * Rx(rx)
+        """
+        if coords_mm_deg is None or len(coords_mm_deg) != 6:
+            raise ValueError("coords_mm_deg must be length 6: [x,y,z,rx,ry,rz]")
+
+        rx = float(coords_mm_deg[3]) * math.pi / 180.0
+        ry = float(coords_mm_deg[4]) * math.pi / 180.0
+        rz = float(coords_mm_deg[5]) * math.pi / 180.0
+
+
+        _Rx = np.array([[1.0, 0.0, 0.0],
+                     [0.0,  math.cos(rx), -math.sin(rx)],
+                     [0.0,  math.sin(rx),  math.cos(rx)]], dtype=np.float64)
+        
+        _Ry = np.array([[ math.cos(ry), 0.0, math.sin(ry)],
+                     [0.0, 1.0, 0.0],
+                     [-math.sin(ry), 0.0, math.cos(ry)]], dtype=np.float64)
+        
+        _Rz = np.array([[math.cos(rz), -math.sin(rz), 0.0],
+                     [math.sin(rz),  math.cos(rz), 0.0],
+                     [0.0, 0.0, 1.0]], dtype=np.float64)
+
+        R = _Rz @ _Ry @ _Rx
+
+        R_flip_z_180 = np.array([
+        [1.0,  0.0,  0.0],
+        [0.0, 1.0,  0.0],
+        [0.0,  0.0, -1.0],
+        ], dtype=np.float64)
+
+        Rm_cmd = R @ R_flip_z_180
+
+        rx, ry, rz = rotmat_to_euler_intrinsic_ZYX_deg(Rm_cmd)
+
+        return [float(coords_mm_deg[0]), float(coords_mm_deg[1]), float(coords_mm_deg[2]),
+                    float(rx), float(ry), float(rz)]
+
+
 
     # -------------------------
     # Execute action (PickandPlace 동작 수행)
@@ -147,9 +210,25 @@ class JetcobotRobotActionServer(Node):
     def execute_cb(self, goal_handle):
         self.get_logger().info("🚀 Executing PickAndPlace action (state checked)")
 
-        pick = list(goal_handle.request.pick_coords)     # [mm,mm,mm,deg,deg,deg]
-        pick[0] += SELF_OFFSET_X
+        pick = self.sendcoords_flip_z(list(goal_handle.request.pick_coords))     # [mm,mm,mm,deg,deg,deg]
         place = list(goal_handle.request.place_coords)   # [mm,mm,mm,deg,deg,deg]
+
+        # TCP 적용 (gripper 기준 목표 -> EE send_coords)
+        pick_coords = gripper_goal_to_ee_cmd_coords_mm_deg(
+            pick,
+            gripper_z_offset_deg=GRIPPER_Z_OFFSET_DEG,
+            gripper_y_offset_mm=GRIPPER_Y_OFFSET_MM,
+            gripper_z_offset_mm=GRIPPER_Z_OFFSET_MM,
+        )
+        place_coords = gripper_goal_to_ee_cmd_coords_mm_deg(
+            place,
+            gripper_z_offset_deg=GRIPPER_Z_OFFSET_DEG,
+            gripper_y_offset_mm=GRIPPER_Y_OFFSET_MM,
+            gripper_z_offset_mm=GRIPPER_Z_OFFSET_MM,
+        )
+
+        pick_coords[0] += SELF_OFFSET_X
+
 
         result = PickAndPlace.Result()
         result.success = False
@@ -157,7 +236,7 @@ class JetcobotRobotActionServer(Node):
 
         # 0) Servo ON
         try:
-            self.send_feedback(goal_handle, 0.02, "Servo ON")
+            self.send_feedback(goal_handle, 10, "Servo ON")
             self.mc.focus_all_servos()
         except Exception as e:
             result.message = f"Servo ON failed: {e}"
@@ -165,7 +244,7 @@ class JetcobotRobotActionServer(Node):
             return result
 
         # 1) Gripper OPEN
-        self.send_feedback(goal_handle, 0.05, "Gripper OPEN")
+        self.send_feedback(goal_handle, 20, "Gripper OPEN")
         try:
             self.mc.set_gripper_value(GRIP_OPEN_VAL, GRIP_SPEED)
             time.sleep(0.3)
@@ -175,8 +254,8 @@ class JetcobotRobotActionServer(Node):
             return result
 
         # 2) PRE-PICK (안전 높이)
-        pre_pick = coords_replace_z(pick, LIFT_MM)
-        self.send_feedback(goal_handle, 0.12, "Move PRE-PICK")
+        pre_pick = coords_replace_z(pick_coords, LIFT_MM)
+        self.send_feedback(goal_handle, 30, "Move PRE-PICK")
         self.mc.send_coords(pre_pick, MOVE_SPEED, MOVE_MODE)
         ok, why = self.wait_until_reached(goal_handle, pre_pick)
         if not ok:
@@ -185,8 +264,8 @@ class JetcobotRobotActionServer(Node):
             return result
 
         # 3) PICK (내려가기)
-        pick_cmd = coords_replace_z(pick, PICK_Z_MM)
-        self.send_feedback(goal_handle, 0.28, "Move PICK")
+        pick_cmd = coords_replace_z(pick_coords, PICK_Z_MM)
+        self.send_feedback(goal_handle, 40, "Move PICK")
         self.mc.send_coords(pick_cmd, PICK_SPEED, MOVE_MODE)
         ok, why = self.wait_until_reached(goal_handle, pick_cmd)
         if not ok:
@@ -195,7 +274,7 @@ class JetcobotRobotActionServer(Node):
             return result
 
         # 4) Gripper CLOSE
-        self.send_feedback(goal_handle, 0.40, "Gripper CLOSE")
+        self.send_feedback(goal_handle, 50, "Gripper CLOSE")
         try:
             self.mc.set_gripper_value(GRIP_CLOSE_VAL, GRIP_SPEED)
             time.sleep(0.4)
@@ -205,7 +284,7 @@ class JetcobotRobotActionServer(Node):
             return result
 
         # 5) Lift (PRE-PICK로 다시)
-        self.send_feedback(goal_handle, 0.52, "Lift")
+        self.send_feedback(goal_handle, 60, "Lift")
         self.mc.send_coords(pre_pick, PICK_SPEED, MOVE_MODE)
         ok, why = self.wait_until_reached(goal_handle, pre_pick)
         if not ok:
@@ -214,8 +293,8 @@ class JetcobotRobotActionServer(Node):
             return result
 
         # 6) PRE-PLACE
-        pre_place = coords_replace_z(place, LIFT_MM)
-        self.send_feedback(goal_handle, 0.65, "Move PRE-PLACE")
+        pre_place = coords_replace_z(place_coords, LIFT_MM)
+        self.send_feedback(goal_handle, 70, "Move PRE-PLACE")
         self.mc.send_coords(pre_place, MOVE_SPEED, MOVE_MODE)
         ok, why = self.wait_until_reached(goal_handle, pre_place)
         if not ok:
@@ -224,16 +303,16 @@ class JetcobotRobotActionServer(Node):
             return result
 
         # 7) PLACE (내려가기)
-        self.send_feedback(goal_handle, 0.80, "Move PLACE")
-        self.mc.send_coords(place, PLACE_SPEED, MOVE_MODE)
-        ok, why = self.wait_until_reached(goal_handle, place)
+        self.send_feedback(goal_handle, 80, "Move PLACE")
+        self.mc.send_coords(place_coords, PLACE_SPEED, MOVE_MODE)
+        ok, why = self.wait_until_reached(goal_handle, place_coords)
         if not ok:
             result.message = f"Move PLACE failed: {why}"
             goal_handle.abort()
             return result
 
         # 8) Gripper OPEN (release)
-        self.send_feedback(goal_handle, 0.90, "Gripper OPEN (release)")
+        self.send_feedback(goal_handle, 90, "Gripper OPEN (release)")
         try:
             self.mc.set_gripper_value(GRIP_OPEN_VAL, GRIP_SPEED)
             time.sleep(0.4)
@@ -243,14 +322,15 @@ class JetcobotRobotActionServer(Node):
             return result
 
         # 9) HOME
-        self.send_feedback(goal_handle, 0.95, "Return HOME")
-        self.mc.send_coords(HOME_COORDS, MOVE_SPEED, MOVE_MODE)
+        self.send_feedback(goal_handle, 95, "Return HOME")
+        self.mc.send_angles(HOME_ANGLES, MOVE_SPEED, MOVE_MODE)
         ok, why = self.wait_until_reached(goal_handle, HOME_COORDS, timeout_sec=15.0)
         if not ok:
             self.get_logger().warn(f"HOME move not confirmed: {why}")
+        
 
         # DONE
-        self.send_feedback(goal_handle, 1.00, "Done ✅")
+        self.send_feedback(goal_handle, 100, "Done ✅")
         result.success = True
         result.message = "Pick and Place done (checked)"
 

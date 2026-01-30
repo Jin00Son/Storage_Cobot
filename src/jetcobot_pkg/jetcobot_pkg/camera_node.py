@@ -73,9 +73,9 @@ params.perspectiveRemoveIgnoredMarginPerCell = 0.13
 FILTER_BUF_N = 9                                # 필터링 버퍼 수
 MIN_FILTER_SAMPLES = max(3, FILTER_BUF_N // 2)  # 최소 필터 샘플 수
 
-READY_ON_STABLE_DP_THRESH_MM = 1.0              # ready on 최대 dp 값 임계 수치
+READY_ON_STABLE_DP_THRESH_MM = 3.0              # ready on 최대 dp 값 임계 수치
 READY_ON_STABLE_TIME_SEC = 0.7                  # ready on 최소 임계 수치 유지 시간
-READY_ON_MIN_DETECTED_FRAMES = 8                # ready on 최소 탐지 프레임 수
+READY_ON_MIN_DETECTED_FRAMES = 0                # ready on 최소 탐지 프레임 수
 
 READY_OFF_MOVE_DP_THRESH_MM = 1.0               # ready off 최소 dp 값 임계 수치
 READY_OFF_DEBOUNCE_FRAMES = 7                   # ready off 최소 임계 수치 유지 프레임 수
@@ -123,9 +123,6 @@ class CameraPartsNode(Node):
         # =================
         self.parts: dict[int, dict] = {}         #  Part DB
 
-        # ✅ update만 멈추고 publish는 유지 (db 얼려야 할때 - ex. 로봇 움직일때 등등 - 현재 사용안함)
-        self.update_enabled = True
-
         # =================
         # 📡 ROS 통신 
         # =================  
@@ -152,8 +149,6 @@ class CameraPartsNode(Node):
 
     def _ensure_entry(self, mid: int, stamp): # 내부 db 특정 id 초기화(공간할당) 함수
         if mid in self.parts:
-            return
-        if not self.update_enabled:
             return
 
         self.parts[mid] = {
@@ -221,10 +216,6 @@ class CameraPartsNode(Node):
                     continue
 
                 self._ensure_entry(mid, now_stamp)
-
-                if mid not in self.parts or not self.update_enabled:
-                    continue
-
                 d = self.parts[mid]
 
                 # -----------------------------------------------------
@@ -320,12 +311,11 @@ class CameraPartsNode(Node):
                 d["conf"] = 1.0
 
         # -----------------------------------------------------
-        # ✅ marker lost 처리 (update ON일 때만)
+        # ✅ marker lost 처리
         # -----------------------------------------------------
-        if self.update_enabled:
-            for mid, d in self.parts.items():
-                if mid not in detected_ids:
-                    self._reset_lost(d)
+        for mid, d in self.parts.items():
+            if mid not in detected_ids:
+                self._reset_lost(d)
 
         # -----------------------------------------------------
         # ✅ publish는 항상 ON
