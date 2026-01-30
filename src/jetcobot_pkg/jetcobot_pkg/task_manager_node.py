@@ -25,7 +25,7 @@ from jetcobot_pkg.utils.pickandplace_client import PickAndPlaceClient
 PARTS_TOPIC = "/parts"
 ACTION_NAME = "/pickandplace"
 
-AUTO_STABLE_TIME_SEC = 3.0
+AUTO_STABLE_TIME_SEC = 2.0
 SAMPLE_N = 30
 
 PLACE_COORDS_LIST = [
@@ -110,9 +110,7 @@ class TaskManagerNode(Node):
             self.parts[int(part.id)] = {
                 "pose_mm": part.pose_mm,
                 "ready": bool(part.ready_to_pick),
-                "stable": float(part.stable_time_sec),
-                "confidence": float(part.confidence),
-                "last_seen": part.last_seen,
+                "stable": float(part.stable_time_sec)
             }
 
         if self.state == "SAMPLING" and self.selected_id is not None:

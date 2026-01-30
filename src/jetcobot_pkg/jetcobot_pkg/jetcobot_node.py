@@ -50,7 +50,7 @@ PICK_Z_MM = 110.0
 PLACE_Z_MM = 120.0
 
 # 실제 오차값 
-SELF_OFFSET_X = -10.0
+SELF_OFFSET_X = -20
 
 # 로봇 위치 판단 허용 오차값
 POS_FLAG_THRESH = 30.0
@@ -310,6 +310,7 @@ class JetcobotRobotActionServer(Node):
             result.message = f"Move PLACE failed: {why}"
             goal_handle.abort()
             return result
+            
 
         # 8) Gripper OPEN (release)
         self.send_feedback(goal_handle, 90, "Gripper OPEN (release)")

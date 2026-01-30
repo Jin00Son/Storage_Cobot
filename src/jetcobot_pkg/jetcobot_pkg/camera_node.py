@@ -154,8 +154,6 @@ class CameraPartsNode(Node):
         self.parts[mid] = {
             "pose": None,
             "ready": False,
-            "conf": 1.0,
-            "last_seen": stamp,
 
             "det_count": 0,
             "tbuf_cam": [],
@@ -172,7 +170,6 @@ class CameraPartsNode(Node):
     def _reset_lost(self, d: dict): # 내부 db 특정 id 초기화(공간할당) 함수
         d["pose"] = None
         d["ready"] = False
-        d["conf"] = 1.0
 
         d["det_count"] = 0
         d["tbuf_cam"].clear()
@@ -202,10 +199,19 @@ class CameraPartsNode(Node):
         if ids is not None and len(ids) > 0:
             ids_flat = ids.flatten().astype(int)
 
+            # 같은 id가 여러개면 frame 내에서 instance 부여하기 위한 카운터
+            instance_counter = {}  
+
             for i, mid in enumerate(ids_flat):
                 mid = int(mid)
                 detected_ids.add(mid)
 
+                # frame 내 동일 id instance index 부여 (0,1,2...)
+                inst = instance_counter.get(mid, 0)
+                instance_counter[mid] = inst + 1
+
+                # publish에 사용할 "encoded id"
+                mid_encoded = mid + 1000 * inst
                 corners_2d = np.asarray(corners_list[i], dtype=np.float64).reshape(4, 2)
 
                 # ✅ cam->target raw pose (여기서 tvec 단위 = marker_length 단위)
@@ -215,8 +221,8 @@ class CameraPartsNode(Node):
                 if rvec_raw is None:
                     continue
 
-                self._ensure_entry(mid, now_stamp)
-                d = self.parts[mid]
+                self._ensure_entry(mid_encoded, now_stamp)
+                d = self.parts[mid_encoded]
 
                 # -----------------------------------------------------
                 # ✅ Buffer update (cam frame)  (tvec 단위 = mm)
@@ -307,8 +313,7 @@ class CameraPartsNode(Node):
 
                 # --- pose, 이외 다른 정보 기록 ---
                 d["pose"] = T_to_pose(T_b2t_filt)   # Pose.position = mm 로 들어감
-                d["last_seen"] = now_stamp
-                d["conf"] = 1.0
+
 
         # -----------------------------------------------------
         # ✅ marker lost 처리
@@ -332,8 +337,6 @@ class CameraPartsNode(Node):
             p.id = int(mid)
             p.pose_mm = d["pose"]
             p.ready_to_pick = bool(d["ready"])
-            p.confidence = float(d["conf"])
-            p.last_seen = d["last_seen"]
             p.stable_time_sec = float(d["stable_elapsed"])
 
             msg.parts.append(p)
