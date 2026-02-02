@@ -43,7 +43,9 @@ MOVE_TIMEOUT_SEC = 15.0  # 각 모션 최대 허용 시간(원하면 늘려도 �
 
 # 홈 포즈(원하면 수정)
 HOME_COORDS = [-64.2, 23.2, 235.1, -150.48, 27.49, 142.74]  # [mm, mm, mm, deg, deg, deg]
+
 HOME_ANGLES = [-90, 90, -90, -50, 0, 45]
+SCAN_ANGLES = [90, 90, -90, -50, 0, 45]
 
 # 실제 내려가는 end effector Z
 PICK_Z_MM = 110.0

@@ -15,7 +15,7 @@ from jetcobot_pkg.utils.cobot_utils import (
     rotmat_to_euler_intrinsic_ZYX_deg,
 )
 
-# ✅ [ADD] ActionClient 유틸 import
+
 from jetcobot_pkg.utils.pickandplace_client import PickAndPlaceClient
 
 
@@ -184,11 +184,11 @@ class TaskManagerNode(Node):
                 return
 
             # place coords by id
-            if self.selected_id == 1:
+            if self.selected_id // 1000 == 1:
                 place_coords = list(PLACE_COORDS_LIST[0])
-            elif self.selected_id == 2:
+            elif self.selected_id // 1000 == 2:
                 place_coords = list(PLACE_COORDS_LIST[1])
-            elif self.selected_id == 3:
+            elif self.selected_id // 1000 == 3:
                 place_coords = list(PLACE_COORDS_LIST[2])
             else:
                 place_coords = list(PLACE_COORDS_LIST[1])

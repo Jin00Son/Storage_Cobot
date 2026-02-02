@@ -21,8 +21,6 @@ from jetcobot_pkg.utils.camera_utils import (
 
 )
 
-
-
 # ================================
 # ✅ 전역 설정
 # ================================
@@ -152,6 +150,7 @@ class CameraPartsNode(Node):
             return
 
         self.parts[mid] = {
+            "id": None,
             "pose": None,
             "ready": False,
 
@@ -168,6 +167,7 @@ class CameraPartsNode(Node):
         }
 
     def _reset_lost(self, d: dict): # 내부 db 특정 id 초기화(공간할당) 함수
+        d["id"] = None
         d["pose"] = None
         d["ready"] = False
 
@@ -204,14 +204,15 @@ class CameraPartsNode(Node):
 
             for i, mid in enumerate(ids_flat):
                 mid = int(mid)
-                detected_ids.add(mid)
 
-                # frame 내 동일 id instance index 부여 (0,1,2...)
-                inst = instance_counter.get(mid, 0)
-                instance_counter[mid] = inst + 1
+                # frame 내 동일 id instance index 부여 (1,2,3...)
+                inst = instance_counter.get(mid, 0) + 1
+                instance_counter[mid] = inst
 
-                # publish에 사용할 "encoded id"
-                mid_encoded = mid + 1000 * inst
+                # publish에 사용할 "encoded id" (예: id=1 -> 1001,1002,1003)
+                mid_encoded = mid * 1000 + inst
+                detected_ids.add(mid_encoded)
+
                 corners_2d = np.asarray(corners_list[i], dtype=np.float64).reshape(4, 2)
 
                 # ✅ cam->target raw pose (여기서 tvec 단위 = marker_length 단위)
@@ -223,6 +224,7 @@ class CameraPartsNode(Node):
 
                 self._ensure_entry(mid_encoded, now_stamp)
                 d = self.parts[mid_encoded]
+                d["id"] = mid_encoded
 
                 # -----------------------------------------------------
                 # ✅ Buffer update (cam frame)  (tvec 단위 = mm)
@@ -334,7 +336,7 @@ class CameraPartsNode(Node):
             if d["pose"] is None:
                 continue
             p = Part()
-            p.id = int(mid)
+            p.id = int(d["id"])
             p.pose_mm = d["pose"]
             p.ready_to_pick = bool(d["ready"])
             p.stable_time_sec = float(d["stable_elapsed"])
