@@ -4,6 +4,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 
+from std_msgs.msg import Bool
 from jetcobot_interfaces.msg import PartArray
 from jetcobot_interfaces.srv import SetTaskMode, ManualPick
 
@@ -15,31 +16,41 @@ from jetcobot_pkg.utils.cobot_utils import (
     rotmat_to_euler_intrinsic_ZYX_deg,
 )
 
-
-from jetcobot_pkg.utils.pickandplace_client import PickAndPlaceClient
-
+from jetcobot_pkg.utils.jetcobot_action_client import (
+    PickClient,
+    MoveToPoseClient,
+    PlaceClient
+)
 
 # =========================
 # ✅ 전역 설정
 # =========================
 PARTS_TOPIC = "/parts"
+ASSEMBLY_TOPIC = "/assembly_start"
+STORAGE_TOPIC = "/storage_start"
 ACTION_NAME = "/pickandplace"
 
 AUTO_STABLE_TIME_SEC = 2.0
-SAMPLE_N = 30
+SAMPLE_N = 20
+
+WAITING_ANGLES = [90, 90, -90, -50, 0, 45]
+HOME_ANGLES = [-90, 90, -90, -50, 0, 45]
+SAFE_ANGLES = [0, 90, -90, -50, 0, 45]
+
+BOX_HEIGHT = 24.5
+BASE_HEIGHT = 2.5
+
+PLACE_Z_MM = BOX_HEIGHT - BASE_HEIGHT
 
 PLACE_COORDS_LIST = [
-    [+80.0, 180.0, 10.0, 180.0, 0.0, 180.0],  # id 1
-    [  0.0, 180.0, 10.0, 180.0, 0.0, 180.0],  # id 2
-    [-80.0, 180.0, 10.0, 180.0, 0.0, 180.0],  # id 3
+    [ 0.0, 180.0, PLACE_Z_MM, 180.0, 0.0, 180.0],  # id 1
+    [ 0.0, 220.0, PLACE_Z_MM, 180.0, 0.0, 180.0],  # id 2
+    [ 0.0, 260.0, PLACE_Z_MM, 180.0, 0.0, 180.0],  # id 3
 ]
 
+SAFE_PLACE_COORDS = [ 200.0, 0.0, PLACE_Z_MM, 180.0, 0.0, 0.0]
+
 TICK_HZ = 20.0
-
-GRIPPER_Z_OFFSET_DEG = -45.0
-GRIPPER_Y_OFFSET_MM = -10.0
-GRIPPER_Z_OFFSET_MM = 100.0
-
 
 # =========================
 # ✅ 유틸 함수
@@ -90,16 +101,29 @@ class TaskManagerNode(Node):
         self.state = "IDLE"     # IDLE / SAMPLING / EXECUTING
         self.selected_id = None
         self.sample_buf = []
+        self.msg = Bool()
+        self.msg.data = False
+        self.assembly_start = False
+
+        # ✅ [ADD] action에 사용할 pick/place 목표 좌표 저장
+        self.pick_coords = None
+        self.place_coords = None
+
+        #topics
+        self.pub_start = self.create_publisher(Bool, STORAGE_TOPIC, 10)
 
         # subscribe
-        self.sub = self.create_subscription(PartArray, PARTS_TOPIC, self.cb_parts, 10)
+        self.sub_parts = self.create_subscription(PartArray, PARTS_TOPIC, self.cb_parts, 10)
+        self.sub_assembly = self.create_subscription(Bool, ASSEMBLY_TOPIC, self.cb_cobotcomms, 10)
 
         # services
         self.srv_mode = self.create_service(SetTaskMode, "/set_task_mode", self.cb_set_mode)
         self.srv_manual = self.create_service(ManualPick, "/manual_pick", self.cb_manual_pick)
-
-        # ✅ [MOD] ActionClient는 유틸로 대체
-        self.pp = PickAndPlaceClient(node=self, action_name=ACTION_NAME, wait_server_timeout_sec=1.0)
+        
+        # action clients
+        self.pick_cli = PickClient(self, action_name="/pick")
+        self.move_cli = MoveToPoseClient(self, action_name="/move_to_pose")
+        self.place_cli = PlaceClient(self, action_name="/place")
 
         self.timer = self.create_timer(1.0 / TICK_HZ, self.tick)
 
@@ -119,6 +143,11 @@ class TaskManagerNode(Node):
                 self.sample_buf.append(p)
                 if len(self.sample_buf) > SAMPLE_N:
                     self.sample_buf = self.sample_buf[-SAMPLE_N:]
+
+    def cb_cobotcomms(self, msg: Bool):
+        # if not self.state == 'EXECUTING_WAIT':
+        #     return
+        self.assembly_start = bool(msg.data)
 
     def cb_set_mode(self, req: SetTaskMode.Request, res: SetTaskMode.Response):
         self.auto_mode = bool(req.auto_mode)
@@ -158,19 +187,32 @@ class TaskManagerNode(Node):
         return res
 
     def tick(self):
-        # ✅ [ADD] EXECUTING 중이면 action 완료를 consume_done()으로 감지
-        if self.state == "EXECUTING":
-            done = self.pp.action_done()
-            if done is None:
+        # ✅ 항상 publish는 유지
+        self.pub_start.publish(self.msg)
+
+        # ✅ IDLE
+        if self.state == "IDLE":
+            self.msg.data = False
+
+            if not self.auto_mode:
                 return
 
-            success, message = done
-            self.get_logger().info(f"[TASK DONE] success={success} msg={message}")
-            self._reset_to_idle()
+            candidates = [pid for pid, info in self.parts.items() if info["stable"] >= AUTO_STABLE_TIME_SEC]
+            if not candidates:
+                return
+
+            candidates.sort()
+            chosen = candidates[0]
+
+            self.selected_id = chosen
+            self.sample_buf = []
+            self.state = "SAMPLING"
             return
 
         # ✅ SAMPLING
         if self.state == "SAMPLING":
+            self.msg.data = False
+
             if self.selected_id is None:
                 self.state = "IDLE"
                 return
@@ -193,37 +235,150 @@ class TaskManagerNode(Node):
             else:
                 place_coords = list(PLACE_COORDS_LIST[1])
 
-            # ✅ [MOD] goal 전송은 유틸로 한 줄
-            ok = self.pp.send_goal(pick_coords, place_coords)
-            if not ok:
-                self.get_logger().error("send_goal failed")
-                self._reset_to_idle()
+            self.pick_coords = pick_coords
+            self.place_coords = place_coords
+            self.safe_pick = True
+            self.safe_place = True
+
+            if not self.pick_cli.send_goal(self.pick_coords, self.safe_pick):
+                self.get_logger().error("send_goal failed.. Trying Again")
                 return
 
-            self.state = "EXECUTING"
+            self.state = "EXECUTING_PICK"
             return
 
-        # ✅ IDLE
-        if self.state == "IDLE":
-            if not self.auto_mode:
+        # ✅ EXECUTING_PICK
+        if self.state == "EXECUTING_PICK":
+            self.msg.data = False
+
+            # pick action done 확인
+            if not self._is_action_done(self.pick_cli.action_done()):
+                return
+            
+            # move to pose action 보내기
+            if not self.move_cli.send_goal_angles(WAITING_ANGLES):
+                self.get_logger().error("send_goal failed.. Trying Again")
                 return
 
-            candidates = [pid for pid, info in self.parts.items() if info["stable"] >= AUTO_STABLE_TIME_SEC]
-            if not candidates:
+            self.state = "EXECUTING_WAIT_POSE"
+            return
+
+        # ✅ EXECUTING_WAIT_POSE
+        if self.state == "EXECUTING_WAIT_POSE":
+            self.msg.data = False
+
+            if not self._is_action_done(self.move_cli.action_done()):
                 return
 
-            candidates.sort()
-            chosen = candidates[0]
+            if self.assembly_start == True:
+                self.get_logger().info(f"[TASK DONE] Waiting until Assembly Cobot Leaves Storage Area..")
+                self.state = "EXECUTING_WAITING"
+                return
 
-            self.selected_id = chosen
-            self.sample_buf = []
-            self.state = "SAMPLING"
+            if not self.place_cli.send_goal(self.place_coords, self.safe_place):
+                self.get_logger().error("send_goal failed.. Trying Again")
+                return
+
+            self.msg.data = True
+            self.state = "EXECUTING_PLACE"
+            return
+
+        # ✅ EXECUTING_WAITING
+        if self.state == "EXECUTING_WAITING":
+            self.msg.data = False
+
+            if self.assembly_start == False:
+                if not self.place_cli.send_goal(self.place_coords, self.safe_place):
+                    self.get_logger().error("send_goal failed.. Trying Again")
+                    return
+
+                self.msg.data = True
+                self.state = "EXECUTING_PLACE"
+            return
+
+        # ✅ EXECUTING_PLACE
+        if self.state == "EXECUTING_PLACE":
+            self.msg.data = True
+
+            if not self._is_action_done(self.place_cli.action_done()):
+                return
+
+            if not self.move_cli.send_goal_angles(HOME_ANGLES):
+                self.get_logger().error("send_goal failed.. Trying Again")
+                return
+
+            self.msg.data = False
+            self.state = "EXECUTING_HOME_POSE"
+            return
+
+        # ✅ EXECUTING_HOME_POSE
+        if self.state == "EXECUTING_HOME_POSE":
+            self.msg.data = False
+
+            if not self._is_action_done(self.move_cli.action_done()):
+                return
+
+            self._reset_to_idle()
+            return
+        
+        # ✅ EXECUTING_SAFE_MOVE
+        if self.state == "EXECUTING_SAFE_MOVE":
+            self.msg.data = False
+
+            if not self._is_action_done(self.move_cli.action_done()):
+                self.get_logger().error("send_goal failed.. Trying Again")
+                return
+            
+            self.safe_place = True
+            if not self.place_cli.send_goal(SAFE_PLACE_COORDS, self.safe_place):
+                self.get_logger().error("send_goal failed.. Trying Again")
+                return
+
+            self.msg.data = False
+            self.state = "EXECUTING_PLACE"
+            return
+        
+    def _is_action_done(self, done):
+
+        if done is None:
+            return False
+        success, message = done
+        if success:
+            self.get_logger().info(f"[TASK DONE] success={success} msg={message}")
+            return True
+        else:
+            self.get_logger().error(f"[TASK FAIL] success={success} msg={message}")
+            if self.state == "EXECUTING_PICK":
+                self.get_logger().error(f"[TASK FAIL] Object is out of Cobot's Range. Replace Object! <Returning to Scanning State> 💨")
+            self._reset_to_idle()
+            return False
 
     def _reset_to_idle(self):
-        self.state = "IDLE"
+
+        if self.state == "EXECUTING_WAIT_POSE": # wait pose 이동 실패시
+            self.safe_place = True
+            if not self.place_cli.send_goal(self.pick_coords, self.safe_place): 
+                self.get_logger().error("🛑 Safety Measures failed.. Breaking Systems, 👷 Manual Assistance Needed") # 추후 시스템 정지, 경고 보내는 기능 여기에 추가
+        
+            self.state = "EXECUTING_PLACE"
+            
+        elif self.state == "EXECUTING_PLACE": # Place 실패시: Safety Pose 이동 -> 안전 장소에 물체 두기 -> Home Pose 복귀
+            self.msg.data = False # action을 실패했기에 False로 변경
+            if not self.move_cli.send_goal_angles(SAFE_ANGLES): # SAFE_ANGLES는 실패 안한다고 가정
+                self.get_logger().error("🛑 Safety Measures failed.. Breaking System, 👷 Manual Assistance Needed") # 추후 시스템 정지, 경고 보내는 기능 여기에 추가
+            self.state = "EXECUTING_SAFE_MOVE"
+
+        else: 
+            self.state = "IDLE"
+                
         self.selected_id = None
         self.sample_buf = []
         self.parts = {}  # ✅ 누적 방지: DB 초기화
+        self.pick_coords = None
+        self.place_coords = None
+
+        
+
 
 
 def main():

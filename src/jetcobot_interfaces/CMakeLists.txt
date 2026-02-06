@@ -16,9 +16,15 @@ find_package(geometry_msgs REQUIRED)
 # find_package(<dependency> REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "action/PickAndPlace.action"
+  "action/Pick.action"
+  "action/Place.action"
+  "action/MoveToPose.action"
   "msg/Part.msg"
   "msg/PartArray.msg"
+  "msg/SectionResult.msg"
+  "msg/StorageReply.msg"
+  "msg/StorageRequest.msg"
+  "srv/CoordsAngles.srv"
   "srv/ManualPick.srv"
   "srv/SetTaskMode.srv"
   DEPENDENCIES std_msgs geometry_msgs builtin_interfaces

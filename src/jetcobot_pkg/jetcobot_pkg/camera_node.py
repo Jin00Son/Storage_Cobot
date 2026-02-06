@@ -10,6 +10,8 @@ from std_msgs.msg import Header
 
 from jetcobot_interfaces.msg import Part, PartArray
 
+from jetcobot_interfaces.srv import CoordsAngles
+
 from jetcobot_pkg.utils.camera_utils import (
     load_intrinsics,                    # Camera Matrix, Dist Coeff 저장 npz 파일 불러오는 함수
     solve_marker_pose_from_corners,     # cv2 solvePNP 통해서 마커 위치 추정
@@ -45,9 +47,10 @@ T_G2C = np.array([              # Hand-eye Calibration 결과 matrix
 T_G2C_MM = T_G2C.copy()
 T_G2C_MM[:3, 3] *= 1000.0       # T_G2C 단위 변환 mm
 
-USE_FIXED_T_B2G = True          # cobot으로 부터 실시간 T_B2G coords 받을때 False
+USE_FIXED_T_B2G = False          # cobot으로 부터 실시간 T_B2G coords 받을때 False
 
-T_B2G_FIXED_MM = mycobot_coords_to_T_b2g([-64.2, 23.2, 235.1, -150.48, 27.49, 142.74]) # T_B2G
+HOME_COORDS = [-64.2, 23.2, 235.1, -150.48, 27.49, 142.74]
+T_B2G_FIXED_MM = mycobot_coords_to_T_b2g(HOME_COORDS) # T_B2G
 
 # -------------------
 # Aruco 전역 설정
@@ -68,7 +71,7 @@ params.perspectiveRemoveIgnoredMarginPerCell = 0.13
 # -------------------
 # 부품 상태 판단 파라미터
 # -------------------
-FILTER_BUF_N = 9                                # 필터링 버퍼 수
+FILTER_BUF_N = 30                                # 필터링 버퍼 수
 MIN_FILTER_SAMPLES = max(3, FILTER_BUF_N // 2)  # 최소 필터 샘플 수
 
 READY_ON_STABLE_DP_THRESH_MM = 3.0              # ready on 최대 dp 값 임계 수치
@@ -120,6 +123,7 @@ class CameraPartsNode(Node):
         # ✖️ Class 변수 
         # =================
         self.parts: dict[int, dict] = {}         #  Part DB
+        self.angles_coords = None
 
         # =================
         # 📡 ROS 통신 
@@ -127,6 +131,9 @@ class CameraPartsNode(Node):
         self.pub_parts = self.create_publisher(PartArray, TOPIC_PARTS, 10)
         period = 1.0 / max(1.0, FPS)
         self.timer = self.create_timer(period, self.tick)
+
+        self.cli_ang_coord = self.create_client(CoordsAngles, 'get_coords_angles')
+        self.req = CoordsAngles.Request()
 
         self.get_logger().info("✅ CameraPartsNode started")
         self.get_logger().info(f"- device: {CAM_DEVICE}")
@@ -136,12 +143,28 @@ class CameraPartsNode(Node):
     # 🖨️ Node 함수
     # =================
 
+    def future_callback(self, future):
+        try:
+            response = future.result()
+            self.angles_coords = response.coords_angles
+            
+        except Exception as e:
+            self.get_logger().error('Service call failed %s' % e)
+
+
     def get_T_b2c_mm(self) -> np.ndarray: # base2camera 4x4 matrix 반환 함수
+
         if USE_FIXED_T_B2G:
             T_b2g_mm = T_B2G_FIXED_MM
         else:
-            # TODO: 로봇에서 base->gripper 실시간 받아오면 여기에 넣기
-            T_b2g_mm = T_B2G_FIXED_MM
+            self.req.type = 1 # 1: coords
+            self.future = self.cli_ang_coord.call_async(self.req)
+            self.future.add_done_callback(self.future_callback)
+
+            if self.angles_coords is None:
+                T_b2g_mm = T_B2G_FIXED_MM
+            else:
+                T_b2g_mm = mycobot_coords_to_T_b2g(self.angles_coords)
 
         return T_b2g_mm @ T_G2C_MM
 
@@ -182,7 +205,7 @@ class CameraPartsNode(Node):
         d["move_counter"] = 0
         d["move_start_time"] = None
 
-    def tick(self): # 타이머 콜백 함수 (프레임 읽기 --> 마커 위치 읽기 --> 부품 내부 db 기록)
+    def tick(self): # 타이머 콜백 함수 (프레임 읽기 --> 마커 위치 읽기 --> 부품 정보 dictionary 기록 --> 토픽으로 발행)
         ret, frame = self.cap.read()
         if not ret:
             return

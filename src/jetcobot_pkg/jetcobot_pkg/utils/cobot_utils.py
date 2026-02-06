@@ -81,6 +81,67 @@ def rotmat_to_euler_intrinsic_ZYX_deg(Rm):
             ry * 180.0 / math.pi,
             rz * 180.0 / math.pi)
 
+
+# ------------------------
+# 내부 유틸들 (외부 함수 의존 제거)
+# ------------------------
+def _deg2rad(d): return d * math.pi / 180.0
+def _rad2deg(r): return r * 180.0 / math.pi
+
+def _Rz(a):
+    c, s = math.cos(a), math.sin(a)
+    return np.array([[c,-s,0],[s,c,0],[0,0,1]], dtype=np.float64)
+
+def _Ry(a):
+    c, s = math.cos(a), math.sin(a)
+    return np.array([[c,0,s],[0,1,0],[-s,0,c]], dtype=np.float64)
+
+def _Rx(a):
+    c, s = math.cos(a), math.sin(a)
+    return np.array([[1,0,0],[0,c,-s],[0,s,c]], dtype=np.float64)
+
+def euler_intrinsic_ZYX_deg_to_rotmat(rx_deg, ry_deg, rz_deg):
+    # R = Rz(rz) * Ry(ry) * Rx(rx)
+    rx, ry, rz = _deg2rad(rx_deg), _deg2rad(ry_deg), _deg2rad(rz_deg)
+    return _Rz(rz) @ _Ry(ry) @ _Rx(rx)
+
+def rotmat_to_euler_intrinsic_ZYX_deg(Rm):
+    # intrinsic ZYX: yaw(Z), pitch(Y), roll(X)
+    sy = math.sqrt(Rm[0, 0]*Rm[0, 0] + Rm[1, 0]*Rm[1, 0])
+    singular = sy < 1e-9
+
+    if not singular:
+        rz = math.atan2(Rm[1, 0], Rm[0, 0])
+        ry = math.atan2(-Rm[2, 0], sy)
+        rx = math.atan2(Rm[2, 1], Rm[2, 2])
+    else:
+        rz = math.atan2(-Rm[0, 1], Rm[1, 1])
+        ry = math.atan2(-Rm[2, 0], sy)
+        rx = 0.0
+
+    return (_rad2deg(rx), _rad2deg(ry), _rad2deg(rz))
+
+def coords_mm_deg_to_T(coords):
+    x, y, z, rx, ry, rz = [float(v) for v in coords]
+    T = np.eye(4, dtype=np.float64)
+    T[:3, :3] = euler_intrinsic_ZYX_deg_to_rotmat(rx, ry, rz)
+    T[:3, 3] = np.array([x, y, z], dtype=np.float64)
+    return T
+
+def T_to_coords_mm_deg(T):
+    x, y, z = T[:3, 3].tolist()
+    rx, ry, rz = rotmat_to_euler_intrinsic_ZYX_deg(T[:3, :3])
+    return [float(x), float(y), float(z), float(rx), float(ry), float(rz)]
+
+def inv_T(T):
+    Rm = T[:3, :3]
+    t  = T[:3, 3]
+    Ti = np.eye(4, dtype=np.float64)
+    Ti[:3, :3] = Rm.T
+    Ti[:3, 3] = -Rm.T @ t
+    return Ti
+
+
 # ⭐⭐ TCP 적용 send_coords 보낼 명령 좌표 변환 ⭐⭐
 def gripper_goal_to_ee_cmd_coords_mm_deg(
     gripper_coords_mm_deg,
@@ -101,65 +162,6 @@ def gripper_goal_to_ee_cmd_coords_mm_deg(
     """
 
     # ------------------------
-    # 내부 유틸들 (외부 함수 의존 제거)
-    # ------------------------
-    def _deg2rad(d): return d * math.pi / 180.0
-    def _rad2deg(r): return r * 180.0 / math.pi
-
-    def _Rz(a):
-        c, s = math.cos(a), math.sin(a)
-        return np.array([[c,-s,0],[s,c,0],[0,0,1]], dtype=np.float64)
-
-    def _Ry(a):
-        c, s = math.cos(a), math.sin(a)
-        return np.array([[c,0,s],[0,1,0],[-s,0,c]], dtype=np.float64)
-
-    def _Rx(a):
-        c, s = math.cos(a), math.sin(a)
-        return np.array([[1,0,0],[0,c,-s],[0,s,c]], dtype=np.float64)
-
-    def euler_intrinsic_ZYX_deg_to_rotmat(rx_deg, ry_deg, rz_deg):
-        # R = Rz(rz) * Ry(ry) * Rx(rx)
-        rx, ry, rz = _deg2rad(rx_deg), _deg2rad(ry_deg), _deg2rad(rz_deg)
-        return _Rz(rz) @ _Ry(ry) @ _Rx(rx)
-
-    def rotmat_to_euler_intrinsic_ZYX_deg(Rm):
-        # intrinsic ZYX: yaw(Z), pitch(Y), roll(X)
-        sy = math.sqrt(Rm[0, 0]*Rm[0, 0] + Rm[1, 0]*Rm[1, 0])
-        singular = sy < 1e-9
-
-        if not singular:
-            rz = math.atan2(Rm[1, 0], Rm[0, 0])
-            ry = math.atan2(-Rm[2, 0], sy)
-            rx = math.atan2(Rm[2, 1], Rm[2, 2])
-        else:
-            rz = math.atan2(-Rm[0, 1], Rm[1, 1])
-            ry = math.atan2(-Rm[2, 0], sy)
-            rx = 0.0
-
-        return (_rad2deg(rx), _rad2deg(ry), _rad2deg(rz))
-
-    def coords_mm_deg_to_T(coords):
-        x, y, z, rx, ry, rz = [float(v) for v in coords]
-        T = np.eye(4, dtype=np.float64)
-        T[:3, :3] = euler_intrinsic_ZYX_deg_to_rotmat(rx, ry, rz)
-        T[:3, 3] = np.array([x, y, z], dtype=np.float64)
-        return T
-
-    def T_to_coords_mm_deg(T):
-        x, y, z = T[:3, 3].tolist()
-        rx, ry, rz = rotmat_to_euler_intrinsic_ZYX_deg(T[:3, :3])
-        return [float(x), float(y), float(z), float(rx), float(ry), float(rz)]
-
-    def inv_T(T):
-        Rm = T[:3, :3]
-        t  = T[:3, 3]
-        Ti = np.eye(4, dtype=np.float64)
-        Ti[:3, :3] = Rm.T
-        Ti[:3, 3] = -Rm.T @ t
-        return Ti
-
-    # ------------------------
     # 본 계산
     # ------------------------
     T_b2g = coords_mm_deg_to_T(gripper_coords_mm_deg)
@@ -172,3 +174,34 @@ def gripper_goal_to_ee_cmd_coords_mm_deg(
     # base->EE = base->Gripper * inv(EE->Gripper)
     T_b2e = T_b2g @ inv_T(T_e2g)
     return T_to_coords_mm_deg(T_b2e)
+
+
+def apply_xyz_offset_to_sendcoords(
+    coords_mm_deg,
+    dx_mm: float,
+    dy_mm: float,
+    dz_mm: float,
+):
+    """
+    ✅ 요청하신 동작 그대로:
+    - coords(sendcoords) -> T_cmd
+    - offset(dx,dy,dz) -> T_off (회전은 I)
+    - 두 개 곱해서 T_new 만들기
+    - T_new -> sendcoords 반환
+
+    offset_frame:
+      - "base"(default): base 좌표계 기준으로 평행이동 적용  => T_new = T_off @ T_cmd
+      - "tool": tool(ee) 좌표계 기준으로 평행이동 적용      => T_new = T_cmd @ T_off
+    """
+    T_cmd = coords_mm_deg_to_T(coords_mm_deg)
+
+    T_off = np.eye(4, dtype=np.float64)
+    T_off[:3, 3] = np.array([float(dx_mm), float(dy_mm), float(dz_mm)], dtype=np.float64)
+    # 회전은 identity로 유지
+
+    T_new = T_cmd @ T_off
+
+    return T_to_coords_mm_deg(T_new)
+
+
+

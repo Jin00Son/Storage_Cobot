@@ -101,9 +101,6 @@ def T_to_pose(T: np.ndarray) -> Pose:
     return pose
 
 
-
-
-# ===Mycobot EE cords => Homogeneous Transformation 변환 함수 (반환값: 4x4 mtx)=== #
 def mycobot_coords_to_T_b2g(coords) -> np.ndarray:
 
     if coords is None or len(coords) < 6:
