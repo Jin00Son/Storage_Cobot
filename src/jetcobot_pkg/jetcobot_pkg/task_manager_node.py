@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 import math
+import time
 import numpy as np
 import rclpy
 from rclpy.node import Node
 
-from std_msgs.msg import Bool
-from jetcobot_interfaces.msg import PartArray
-from jetcobot_interfaces.srv import SetTaskMode, ManualPick
+from std_msgs.msg import Bool, Int32, String
+
+from jetcobot_interfaces.msg import (
+    PartArray, 
+    SectionResult, 
+    StorageRequest, 
+    StorageResponse,
+    ManualRequest,
+    ManualResponse,
+)
 
 from jetcobot_pkg.utils.cobot_utils import (
     pose_mm_to_xyz_quat,
@@ -25,16 +33,26 @@ from jetcobot_pkg.utils.jetcobot_action_client import (
 # =========================
 # ✅ 전역 설정
 # =========================
-PARTS_TOPIC = "/parts"
-ASSEMBLY_TOPIC = "/assembly_start"
-STORAGE_TOPIC = "/storage_start"
-ACTION_NAME = "/pickandplace"
+# publish
+STORAGE_TOPIC = "/jetcobot/storage/start"
+STORAGE_AUTO_REQUEST_TOPIC = "/jetcobot/storage/auto/request"
+STORAGE_MANUAL_RESEPONSE_TOPIC = "/jetcobot/storage/manual/response"
+DB_UPDATE_TOPIC = "/jetcobot/db_update"
+# STORAGE_ROBOT_STATUS_TOPIC = "/jetcobot/storage/status" # 아직 안만듦
+
+# subscribe
+STORAGE_ROBOT_BOOT_TOPIC = "/jetcobot/storage/boot"
+STORAGE_SET_MODE_TOPIC = "/jetcobot/storage/set_mode"
+PARTS_TOPIC = "/jetcobot/storage/camera/parts"
+ASSEMBLY_TOPIC = "/jetcobot/assembly/start"
+STORAGE_AUTO_RESPONSE_TOPIC= "/jetcobot/storage/auto/response"
+STORAGE_MANUAL_REQUEST_TOPIC = "/jetcobot/storage/manual/request"
 
 AUTO_STABLE_TIME_SEC = 2.0
 SAMPLE_N = 20
 
 WAITING_ANGLES = [90, 90, -90, -50, 0, 45]
-HOME_ANGLES = [-90, 90, -90, -50, 0, 45]
+HOME_ANGLES = [-90, 45, -90, -20, 0, 45]
 SAFE_ANGLES = [0, 90, -90, -50, 0, 45]
 
 BOX_HEIGHT = 24.5
@@ -42,15 +60,47 @@ BASE_HEIGHT = 2.5
 
 PLACE_Z_MM = BOX_HEIGHT - BASE_HEIGHT
 
+# x -70 0 70
+# y 180 220 260
+
+SECTION_EDGE_X = -70
+SECTION_EDGE_Y = 180
+
+SECTION_DIST_X = 70
+SECTION_DIST_Y = 40 
+
+SECTION_A_LIST = [
+    [ SECTION_EDGE_X+SECTION_DIST_X*2, SECTION_EDGE_Y+SECTION_DIST_Y*2, PLACE_Z_MM, 180.0, 0.0, 180.0], 
+    [ SECTION_EDGE_X+SECTION_DIST_X*2, SECTION_EDGE_Y+SECTION_DIST_Y*1, PLACE_Z_MM, 180.0, 0.0, 180.0], 
+    [ SECTION_EDGE_X+SECTION_DIST_X*2, SECTION_EDGE_Y+SECTION_DIST_Y*0, PLACE_Z_MM, 180.0, 0.0, 180.0], 
+] # id 1
+
+SECTION_B_LIST = [
+    [ SECTION_EDGE_X+SECTION_DIST_X*1, SECTION_EDGE_Y+SECTION_DIST_Y*2, PLACE_Z_MM, 180.0, 0.0, 180.0], 
+    [ SECTION_EDGE_X+SECTION_DIST_X*1, SECTION_EDGE_Y+SECTION_DIST_Y*1, PLACE_Z_MM, 180.0, 0.0, 180.0], 
+    [ SECTION_EDGE_X+SECTION_DIST_X*1, SECTION_EDGE_Y+SECTION_DIST_Y*0, PLACE_Z_MM, 180.0, 0.0, 180.0], 
+] # id 2
+
+SECTION_C_LIST = [
+    [ SECTION_EDGE_X+SECTION_DIST_X*0, SECTION_EDGE_Y+SECTION_DIST_Y*2, PLACE_Z_MM, 180.0, 0.0, 180.0], 
+    [ SECTION_EDGE_X+SECTION_DIST_X*0, SECTION_EDGE_Y+SECTION_DIST_Y*1, PLACE_Z_MM, 180.0, 0.0, 180.0], 
+    [ SECTION_EDGE_X+SECTION_DIST_X*0, SECTION_EDGE_Y+SECTION_DIST_Y*0, PLACE_Z_MM, 180.0, 0.0, 180.0], 
+] # id 3
+
 PLACE_COORDS_LIST = [
-    [ 0.0, 180.0, PLACE_Z_MM, 180.0, 0.0, 180.0],  # id 1
-    [ 0.0, 220.0, PLACE_Z_MM, 180.0, 0.0, 180.0],  # id 2
-    [ 0.0, 260.0, PLACE_Z_MM, 180.0, 0.0, 180.0],  # id 3
+    [ -70.0, 180.0, PLACE_Z_MM, 180.0, 0.0, 180.0],  # id 1
+    [ -70.0, 260.0, PLACE_Z_MM, 180.0, 0.0, 180.0],  # id 2
+    [ 70.0, 180.0, PLACE_Z_MM, 180.0, 0.0, 180.0],  # id 3
 ]
 
 SAFE_PLACE_COORDS = [ 200.0, 0.0, PLACE_Z_MM, 180.0, 0.0, 0.0]
 
 TICK_HZ = 20.0
+
+REQUEST_TIMEOUT = 10.0 # sec
+
+AUTO = 0
+MANUAL = 1
 
 # =========================
 # ✅ 유틸 함수
@@ -95,39 +145,112 @@ class TaskManagerNode(Node):
     def __init__(self):
         super().__init__("task_manager_node")
 
-        self.auto_mode = True
-        self.parts = {}
+        # ================= 
+        # ✖️ Class 변수 
+        # =================
+        
+        # 상위 상태
+        self.state = "IDLE" # timer 총괄 상태: IDLE / SAMPLING / EXECUTING / ...
+        self.set_mode = AUTO # auto / manual mode
 
-        self.state = "IDLE"     # IDLE / SAMPLING / EXECUTING
+        # cobot 통신
+        self.msg = Bool() # storage cobot 동작 상태(pub)
+        self.msg.data = False
+        self.assembly_start = False # assembly cobot 동작 상태(sub)
+
+        # DB 통신
+        self.str_req_sent = False # DB 에게 보관 위치 요청 확인 트리거
+        self.place_failed = False # place 실패
+
+        # 부팅 상태
+        self._booted = False # 로봇 부팅 여부
+        self.shutdown = None # 로봇 shutdown 트리거
+        
+        # sample 측정용 변수
+        self.parts = {}
         self.selected_id = None
         self.sample_buf = []
-        self.msg = Bool()
-        self.msg.data = False
-        self.assembly_start = False
 
-        # ✅ [ADD] action에 사용할 pick/place 목표 좌표 저장
-        self.pick_coords = None
-        self.place_coords = None
+        # pick, place coords 저장 변수
+        self.str_id = None # 보관 section id
+        self.selected_section = None # 보관 section
+        self.place_coords = None # 보관 좌표
+        self.pick_coords = None # 부품 좌표
+
+        # 기타
+        self.sent_time = None # 요청을 보낸 시간 저장
+        self.pub_once = None # 단일 publish 확인
+
+        # =================
+        # 📡 ROS 통신 
+        # =================
 
         #topics
         self.pub_start = self.create_publisher(Bool, STORAGE_TOPIC, 10)
+        self.pub_str_req = self.create_publisher(StorageRequest, STORAGE_AUTO_REQUEST_TOPIC, 10)
+        self.pub_sec_res = self.create_publisher(SectionResult, DB_UPDATE_TOPIC, 10)
+        self.pub_man_res = self.create_publisher(ManualResponse,STORAGE_MANUAL_RESEPONSE_TOPIC , 10)
 
         # subscribe
         self.sub_parts = self.create_subscription(PartArray, PARTS_TOPIC, self.cb_parts, 10)
         self.sub_assembly = self.create_subscription(Bool, ASSEMBLY_TOPIC, self.cb_cobotcomms, 10)
-
-        # services
-        self.srv_mode = self.create_service(SetTaskMode, "/set_task_mode", self.cb_set_mode)
-        self.srv_manual = self.create_service(ManualPick, "/manual_pick", self.cb_manual_pick)
+        self.sub_str_res = self.create_subscription(StorageResponse, STORAGE_AUTO_RESPONSE_TOPIC, self.cb_response, 10)
+        self.sub_manual_req = self.create_subscription(ManualRequest,STORAGE_MANUAL_REQUEST_TOPIC, self.cb_manual, 10)
+        self.sub_mode = self.create_subscription(Int32, STORAGE_SET_MODE_TOPIC, self.cb_set_mode, 10)
+        self.boot = self.create_subscription(Bool, STORAGE_ROBOT_BOOT_TOPIC, self.cb_sub_boot, 10)
         
         # action clients
         self.pick_cli = PickClient(self, action_name="/pick")
         self.move_cli = MoveToPoseClient(self, action_name="/move_to_pose")
         self.place_cli = PlaceClient(self, action_name="/place")
 
-        self.timer = self.create_timer(1.0 / TICK_HZ, self.tick)
-
         self.get_logger().info("✅ TaskManagerNode started")
+        self.get_logger().info("✅ Default Settings: Mode -> Auto")
+        self.get_logger().info("✋ Waiting for boot trigger...")
+
+    # =================
+    # 🖨️ Node 함수
+    # =================
+
+    # ---------------
+    # ✅ 유틸 함수
+    # ---------------
+    def section_to_placecoords(self, section, id): # 섹션을 좌표로 변환 시켜주는 유틸함수
+        if section == 'A':
+            place_coords = list(SECTION_A_LIST[id-1])
+        elif section == 'B':
+            place_coords = list(SECTION_B_LIST[id-1])
+        elif section == 'C':
+            place_coords = list(SECTION_C_LIST[id-1])
+        else:
+            place_coords = list(SAFE_PLACE_COORDS)
+
+        return place_coords
+    
+    def shutdown_postponed(self):
+        self._booted = False
+        self.shutdown = None
+        self.timer.cancel()
+        self.get_logger().info("Shutdown received -> Canceled main timer")
+
+    # ---------------
+    # ✅ 콜백 함수
+    # ---------------
+    def cb_sub_boot(self, msg:Bool): 
+
+        if not self._booted and msg.data: # msg -> True, Boot up
+            self._booted = True
+            self.get_logger().info("BOOT received -> starting main timer")
+            self.timer = self.create_timer(1.0 / TICK_HZ, self.tick)
+
+        if self._booted and not msg.data: # msg -> False, Shutdown
+            if self.state != "IDLE": 
+                self.get_logger().info("Shutdown received -> Robot is Busy, Timer will be canceled when state is IDLE")
+                self.shutdown = True
+                return
+            self._booted = False
+            self.timer.cancel()
+            self.get_logger().info("Shutdown received -> Canceled main timer")
 
     def cb_parts(self, msg: PartArray):
         for part in msg.parts:
@@ -139,53 +262,68 @@ class TaskManagerNode(Node):
 
         if self.state == "SAMPLING" and self.selected_id is not None:
             if self.selected_id in self.parts:
+                self.pub_once = None
                 p = self.parts[self.selected_id]["pose_mm"]
                 self.sample_buf.append(p)
                 if len(self.sample_buf) > SAMPLE_N:
                     self.sample_buf = self.sample_buf[-SAMPLE_N:]
-
+            if self.selected_id not in self.parts:
+                if self.set_mode == MANUAL and self.pub_once is None:
+                    man_msg = ManualResponse()
+                    man_msg.success = False
+                    man_msg.msg = "The Requested Part cannot be detected. Please check the working field"
+                    self.pub_man_res.publish(man_msg) 
+                    self.pub_once = True
+                if self.set_mode == AUTO:
+                    # error msg
+                    return
+                
     def cb_cobotcomms(self, msg: Bool):
         # if not self.state == 'EXECUTING_WAIT':
         #     return
         self.assembly_start = bool(msg.data)
 
-    def cb_set_mode(self, req: SetTaskMode.Request, res: SetTaskMode.Response):
-        self.auto_mode = bool(req.auto_mode)
-        res.success = True
-        res.message = f"auto_mode set to {self.auto_mode}"
-        return res
+    def cb_response(self, msg: StorageResponse):
+        str_section = msg.section
+        self.str_id = msg.id
+        self.place_coords = self.section_to_placecoords(str_section, self.str_id)
 
-    def cb_manual_pick(self, req: ManualPick.Request, res: ManualPick.Response):
-        part_id = int(req.part_id)
+    def cb_set_mode(self, msg: Int32):
+        self.set_mode = int(msg.data) # 0:auto, 1:manual
+        if self.set_mode == MANUAL:
+            self.get_logger().info("Robot is set to Manual Mode.")
+        if self.set_mode == AUTO:
+            self.get_logger().info("Robot is set to Auto Mode.")
 
-        if self.auto_mode:
-            res.accepted = False
-            res.message = "ManualPick rejected: auto_mode=True"
-            return res
+    def cb_manual(self, msg:ManualRequest):
+        man_msg = ManualResponse()
 
+        if self.set_mode != MANUAL:
+            man_msg.success = False
+            man_msg.msg = "Robot is currently in Auto Mode, Please Set to Manual!"
+            self.pub_man_res.publish(man_msg) 
+            return
+        
         if self.state != "IDLE":
-            res.accepted = False
-            res.message = f"ManualPick rejected: busy (state={self.state})"
-            return res
+            man_msg.success = False
+            man_msg.msg = "Robot is currently Busy. Please wait until the current task is done!"
+            self.pub_man_res.publish(man_msg)        
+            return 
 
-        if part_id not in self.parts:
-            res.accepted = False
-            res.message = f"ManualPick rejected: part_id={part_id} not seen"
-            return res
+        task_id = int(msg.task_id)
+        part_id = int(msg.part_id)
+        self.selected_section = str(msg.section)
+        self.str_id  = int(msg.section_id)
 
-        if not self.parts[part_id]["ready"]:
-            res.accepted = False
-            res.message = f"ManualPick rejected: part_id={part_id} ready_to_pick=False"
-            return res
+        if task_id == 1:
+            self.selected_id = part_id*1000 + 1
+            self.sample_buf = []
+            self.state = "SAMPLING"
+            self.place_coords = self.section_to_placecoords(self.selected_section, self.str_id)
 
-        self.selected_id = part_id
-        self.sample_buf = []
-        self.state = "SAMPLING"
-
-        res.accepted = True
-        res.message = f"ManualPick accepted: sampling part_id={part_id}"
-        return res
-
+    # ---------------
+    # ✅ 메인 타이머
+    # ---------------
     def tick(self):
         # ✅ 항상 publish는 유지
         self.pub_start.publish(self.msg)
@@ -193,21 +331,29 @@ class TaskManagerNode(Node):
         # ✅ IDLE
         if self.state == "IDLE":
             self.msg.data = False
+            if self.shutdown:
+                self.shutdown_postponed()
 
-            if not self.auto_mode:
+            if self.set_mode == AUTO:
+                candidates = [pid for pid, info in self.parts.items() if info["stable"] >= AUTO_STABLE_TIME_SEC]
+                if not candidates:
+                    return
+                candidates.sort() # id 빠른 순서로 id 선정
+                chosen = candidates[0] 
+                self.selected_id = chosen
+                self.sample_buf = []
+                self.state = "SAMPLING"
+                return
+            
+            if self.set_mode == MANUAL:
+                if self.pub_once is None:
+                    man_msg = ManualResponse()
+                    man_msg.success = False
+                    man_msg.msg = "Robot is ready for a manual request!"
+                    self.pub_man_res.publish(man_msg)
+                    self.pub_once = True
                 return
 
-            candidates = [pid for pid, info in self.parts.items() if info["stable"] >= AUTO_STABLE_TIME_SEC]
-            if not candidates:
-                return
-
-            candidates.sort()
-            chosen = candidates[0]
-
-            self.selected_id = chosen
-            self.sample_buf = []
-            self.state = "SAMPLING"
-            return
 
         # ✅ SAMPLING
         if self.state == "SAMPLING":
@@ -219,30 +365,58 @@ class TaskManagerNode(Node):
 
             if len(self.sample_buf) < SAMPLE_N:
                 return
+            
+            if self.set_mode == AUTO: # auto mode
+                if not self.str_req_sent:
+                    # publish storage request   
+                    req_msg = StorageRequest()
+                    
+                    if self.selected_id // 1000 == 1:
+                        self.selected_section = "A"
+                    elif self.selected_id // 1000 == 2:
+                        self.selected_section = "B"
+                    elif self.selected_id // 1000 == 3:
+                        self.selected_section = "C"
+                    else:
+                        self.get_logger().error("Undefined Object Detected!")
+                        self._reset_to_idle()
+                        return
+                    req_msg.section = self.selected_section
+                    req_msg.task_id = 1 # 1: place
+                    self.pub_str_req.publish(req_msg) # publish
+                    self.get_logger().info("Place Request Sent to Storage Database!")
+                    self.str_req_sent = True
+
+                    self.sent_time = time.time()
+                elif time.time() - self.sent_time > REQUEST_TIMEOUT:
+                    self.str_req_sent = False
+                    self.get_logger().warn("Place Request Time Out! Returning to IDLE State")
+                    self._reset_to_idle()
+
+                if self.place_coords is None:
+                    return
+                self.sent_time = None
+                
 
             pick_coords = robust_estimate_coords_mm(self.sample_buf[:SAMPLE_N])
             if pick_coords is None:
                 self._reset_to_idle()
                 return
 
-            # place coords by id
-            if self.selected_id // 1000 == 1:
-                place_coords = list(PLACE_COORDS_LIST[0])
-            elif self.selected_id // 1000 == 2:
-                place_coords = list(PLACE_COORDS_LIST[1])
-            elif self.selected_id // 1000 == 3:
-                place_coords = list(PLACE_COORDS_LIST[2])
-            else:
-                place_coords = list(PLACE_COORDS_LIST[1])
-
             self.pick_coords = pick_coords
-            self.place_coords = place_coords
             self.safe_pick = True
             self.safe_place = True
 
             if not self.pick_cli.send_goal(self.pick_coords, self.safe_pick):
                 self.get_logger().error("send_goal failed.. Trying Again")
                 return
+            
+            if self.set_mode == MANUAL:
+                man_msg = ManualResponse()
+                man_msg.success = False
+                man_msg.msg = "The Request is Sent and in Action!"
+                self.pub_man_res.publish(man_msg)
+
 
             self.state = "EXECUTING_PICK"
             return
@@ -302,6 +476,20 @@ class TaskManagerNode(Node):
 
             if not self._is_action_done(self.place_cli.action_done()):
                 return
+            
+            if not self.place_failed:
+                res_msg = SectionResult()
+                res_msg.section = self.selected_section
+                res_msg.id = self.str_id
+                res_msg.occupy = 1
+                self.pub_sec_res.publish(res_msg) # publish section_result
+                self.get_logger().info("Storage Section Result is Sent to Storage Database!")
+                if self.set_mode == MANUAL:
+                    man_msg = ManualResponse()
+                    man_msg.success = True
+                    man_msg.msg = "The Request is successfully done! Wait for a new Request to be done"
+                    self.pub_man_res.publish(man_msg)
+
 
             if not self.move_cli.send_goal_angles(HOME_ANGLES):
                 self.get_logger().error("send_goal failed.. Trying Again")
@@ -316,6 +504,7 @@ class TaskManagerNode(Node):
             self.msg.data = False
 
             if not self._is_action_done(self.move_cli.action_done()):
+                self._reset_to_idle()
                 return
 
             self._reset_to_idle()
@@ -348,12 +537,28 @@ class TaskManagerNode(Node):
             return True
         else:
             self.get_logger().error(f"[TASK FAIL] success={success} msg={message}")
+            self.place_failed = True
             if self.state == "EXECUTING_PICK":
                 self.get_logger().error(f"[TASK FAIL] Object is out of Cobot's Range. Replace Object! <Returning to Scanning State> 💨")
             self._reset_to_idle()
             return False
 
-    def _reset_to_idle(self):
+    def _reset_to_idle(self): # 상태 초기화 --> 만약 작업 중간에 끊기면 원상 복구 작업도 진행
+
+        if self.place_failed:
+            res_msg = SectionResult()
+            res_msg.section = self.selected_section
+            res_msg.id = self.str_id
+            res_msg.occupy = 0
+            self.pub_sec_res.publish(res_msg) # publish section_result
+            self.get_logger().info("Storage Section Result is Sent to Storage Database!")
+            if self.set_mode is MANUAL:
+                man_msg = ManualResponse()
+                man_msg.success = True
+                man_msg.msg = "The Request has failed during progress. Wait until to send a new request"
+                self.pub_man_res.publish(man_msg)
+
+
 
         if self.state == "EXECUTING_WAIT_POSE": # wait pose 이동 실패시
             self.safe_place = True
@@ -361,24 +566,31 @@ class TaskManagerNode(Node):
                 self.get_logger().error("🛑 Safety Measures failed.. Breaking Systems, 👷 Manual Assistance Needed") # 추후 시스템 정지, 경고 보내는 기능 여기에 추가
         
             self.state = "EXECUTING_PLACE"
+            return
             
         elif self.state == "EXECUTING_PLACE": # Place 실패시: Safety Pose 이동 -> 안전 장소에 물체 두기 -> Home Pose 복귀
             self.msg.data = False # action을 실패했기에 False로 변경
             if not self.move_cli.send_goal_angles(SAFE_ANGLES): # SAFE_ANGLES는 실패 안한다고 가정
                 self.get_logger().error("🛑 Safety Measures failed.. Breaking System, 👷 Manual Assistance Needed") # 추후 시스템 정지, 경고 보내는 기능 여기에 추가
             self.state = "EXECUTING_SAFE_MOVE"
+            return
 
         else: 
             self.state = "IDLE"
-                
+
+
+
+        # Class 변수 초기화        
         self.selected_id = None
+        self.str_id = None
+        self.selected_section = None
         self.sample_buf = []
         self.parts = {}  # ✅ 누적 방지: DB 초기화
         self.pick_coords = None
         self.place_coords = None
-
-        
-
+        self.place_failed = False
+        self.str_req_sent = False
+        self.pub_once = None
 
 
 def main():

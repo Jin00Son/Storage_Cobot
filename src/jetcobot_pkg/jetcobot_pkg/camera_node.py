@@ -31,7 +31,7 @@ from jetcobot_pkg.utils.camera_utils import (
 # 카메라 전역 설정
 # -------------------
 CAM_DEVICE = "/dev/jetcocam0"   # Camera 장치 위치
-TOPIC_PARTS = "/parts"          # 발행 토픽 이름
+TOPIC_PARTS = "/jetcobot/storage/camera/parts"          # 발행 토픽 이름
 FPS = 15.0                      # 카메라 초당 프레임수
     
 # -------------------

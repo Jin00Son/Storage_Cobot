@@ -22,11 +22,11 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Part.msg"
   "msg/PartArray.msg"
   "msg/SectionResult.msg"
-  "msg/StorageReply.msg"
+  "msg/StorageResponse.msg"
   "msg/StorageRequest.msg"
+  "msg/ManualRequest.msg"
+  "msg/ManualResponse.msg"
   "srv/CoordsAngles.srv"
-  "srv/ManualPick.srv"
-  "srv/SetTaskMode.srv"
   DEPENDENCIES std_msgs geometry_msgs builtin_interfaces
 )
 

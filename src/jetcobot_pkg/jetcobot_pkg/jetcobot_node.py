@@ -60,8 +60,8 @@ GRIPPER_Y_OFFSET_MM = -10.0
 GRIPPER_Z_OFFSET_MM = 100.0
 
 # 홈 포즈(원하면 수정)
-HOME_ANGLES = [-90, 90, -90, -50, 0, 45]                    # [deg, deg, deg, deg, deg, deg]
-HOME_COORDS = [-64.2, 23.2, 235.1, -150.48, 27.49, 142.74]  # [mm, mm, mm, deg, deg, deg](Base frame)
+HOME_ANGLES = [-90, 45, -90, -20, 0, 45]             # [deg, deg, deg, deg, deg, deg]
+HOME_COORDS = [ -62.8 ,  -79.6 ,  257.4 , -164.41,   15.44,  139.1 ]  # [mm, mm, mm, deg, deg, deg](Base frame)
 
 # pick/place 동작 시 안전 lift 높이 (mm) (Target frame)기준
 LIFT_MM = 50.0
