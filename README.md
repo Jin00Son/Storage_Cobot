@@ -88,22 +88,26 @@ interfaces
 - action 3개로 재분류
 - msg DB 통신용 topic 생성
 - srv jetcobot한테서 현재 coords/angles 요청하는 service 생성
+- cobot 통신용 topic 생성
 
 jetcobotpkg
 - docs 파일 추가 - 마크다운 파일 폴더
 - utils - cobot: apply_xyz_offset_to_sendcoords 함수 추가
 	- jetcobot_action_client 유틸 생성
 
-- Camera Node - jetcobot한테 coords/angles 받는 service client 추가
-- Jetcobot Node - Action Server 3개로 재분류
-		- Offset 적용을 target / base 로 설정하는 기능 추가
-		- Z 축, 물체 높이 고정 사용 기능 추가
-		- 등 대대적인 대공사
-- Task Manager Node - DB 통신용 topic 추가
-		    - jetcobot 끼리 동작 시작 알려주는 토픽 발행 구독 기능 추가
-		    - Action 재분류 한거에 맞추어 전체적인 수정
-		    	- state 분류가 많아짐
-		    	- action 실패 시 동작 과정 복구 및 원위치 기능 단순한 수준으로 추가 
+- Camera Node    
+  - jetcobot한테 coords/angles 받는 service client 추가
+- Jetcobot Node    
+  - Action Server 3개로 재분류   
+  - Offset 적용을 target / base 로 설정하는 기능 추가   
+  - Z 축, 물체 높이 고정 사용 기능 추가   
+  - 등 대대적인 대공사   
+- Task Manager Node     
+  - DB 통신용 topic 추가   
+  - jetcobot 끼리 동작 시작 알려주는 토픽 발행 구독 기능 추가   
+  - Action 재분류 한거에 맞추어 전체적인 수정   
+    - state 분류가 많아짐   
+    - action 실패 시 동작 과정 복구 및 원위치 기능 단순한 수준으로 추가 
 		    	
 추후 과제
 
@@ -112,3 +116,27 @@ jetcobotpkg
 - jetcobot traffic 을 이동 경로 비교를 통해 고도화
 - 외부 오차 요인 분석 list화
 - Calibration 파일들 정리해서 추가하기
+
+#### 2026.02.10 주요 변경 사항 
+
+interfaces 
+- 부팅용 통신 topic 생성
+- 수동 자동 모드 topic 생성
+
+jetcobotpkg
+
+topic 이름들 분류하여서 directory 구조로 수정
+- utils
+- Camera Node
+- Jetcobot Node
+- Task Manager Node   
+  - 서브 부팅 기능 추가   
+  - 자동 / 수동 모드 추가
+		    	
+추후 과제
+
+- YOLO로 객체 인식 하고 좌표 받는 pipe line 구성 및 테스트
+- DB, GUI domain bridge 연결
+- jetcobot traffic 규칙을 설정하여 부딪히지 않는 선에서 동시 작동
+- Calibration 파일들 정리해서 추가하기
+- 상세 설계 문서 작업
