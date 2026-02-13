@@ -37,8 +37,8 @@ from jetcobot_pkg.utils.jetcobot_action_client import (
 STORAGE_TOPIC = "/jetcobot/storage/start"
 STORAGE_AUTO_REQUEST_TOPIC = "/jetcobot/storage/auto/request"
 STORAGE_MANUAL_RESEPONSE_TOPIC = "/jetcobot/storage/manual/response"
-DB_UPDATE_TOPIC = "/jetcobot/db_update"
-# STORAGE_ROBOT_STATUS_TOPIC = "/jetcobot/storage/status" # 아직 안만듦
+DB_UPDATE_TOPIC = "/jetcobot/storage/db_update"
+STORAGE_ROBOT_STATUS_TOPIC = "/jetcobot/storage/status"
 
 # subscribe
 STORAGE_ROBOT_BOOT_TOPIC = "/jetcobot/storage/boot"
@@ -168,6 +168,7 @@ class TaskManagerNode(Node):
         
         # sample 측정용 변수
         self.parts = {}
+        self.candidates = []
         self.selected_id = None
         self.sample_buf = []
 
@@ -180,6 +181,7 @@ class TaskManagerNode(Node):
         # 기타
         self.sent_time = None # 요청을 보낸 시간 저장
         self.pub_once = None # 단일 publish 확인
+        self.cnt = 0 # candidate 파싱 누적 카운트 변수
 
         # =================
         # 📡 ROS 통신 
@@ -190,6 +192,7 @@ class TaskManagerNode(Node):
         self.pub_str_req = self.create_publisher(StorageRequest, STORAGE_AUTO_REQUEST_TOPIC, 10)
         self.pub_sec_res = self.create_publisher(SectionResult, DB_UPDATE_TOPIC, 10)
         self.pub_man_res = self.create_publisher(ManualResponse,STORAGE_MANUAL_RESEPONSE_TOPIC , 10)
+        self.pub_state = self.create_publisher(String, STORAGE_ROBOT_STATUS_TOPIC, 10)
 
         # subscribe
         self.sub_parts = self.create_subscription(PartArray, PARTS_TOPIC, self.cb_parts, 10)
@@ -232,6 +235,13 @@ class TaskManagerNode(Node):
         self.shutdown = None
         self.timer.cancel()
         self.get_logger().info("Shutdown received -> Canceled main timer")
+
+    def state_msg(self):
+        if self.state == "IDLE":
+            return "IDLE"
+        else:
+            return "BUSY"
+
 
     # ---------------
     # ✅ 콜백 함수
@@ -286,6 +296,12 @@ class TaskManagerNode(Node):
     def cb_response(self, msg: StorageResponse):
         str_section = msg.section
         self.str_id = msg.id
+        if self.str_id is None:
+            self.get_logger().warn("The Storage Area is full, Sampling the next candidate")
+            self.cnt += 1
+            self.selected_id = self.candidates[self.cnt]
+            # self.state = "SAMPLING"
+            return
         self.place_coords = self.section_to_placecoords(str_section, self.str_id)
 
     def cb_set_mode(self, msg: Int32):
@@ -325,8 +341,12 @@ class TaskManagerNode(Node):
     # ✅ 메인 타이머
     # ---------------
     def tick(self):
-        # ✅ 항상 publish는 유지
+        # 동기 topic publish
+        state = String()
+        state.data = self.state_msg()
+
         self.pub_start.publish(self.msg)
+        self.pub_state.publish(state)
 
         # ✅ IDLE
         if self.state == "IDLE":
@@ -335,11 +355,11 @@ class TaskManagerNode(Node):
                 self.shutdown_postponed()
 
             if self.set_mode == AUTO:
-                candidates = [pid for pid, info in self.parts.items() if info["stable"] >= AUTO_STABLE_TIME_SEC]
-                if not candidates:
+                self.candidates = [pid for pid, info in self.parts.items() if info["stable"] >= AUTO_STABLE_TIME_SEC]
+                if not self.candidates:
                     return
-                candidates.sort() # id 빠른 순서로 id 선정
-                chosen = candidates[0] 
+                self.candidates.sort() # id 빠른 순서로 id 선정
+                chosen = self.candidates[0] 
                 self.selected_id = chosen
                 self.sample_buf = []
                 self.state = "SAMPLING"
@@ -504,7 +524,6 @@ class TaskManagerNode(Node):
             self.msg.data = False
 
             if not self._is_action_done(self.move_cli.action_done()):
-                self._reset_to_idle()
                 return
 
             self._reset_to_idle()
@@ -558,20 +577,11 @@ class TaskManagerNode(Node):
                 man_msg.msg = "The Request has failed during progress. Wait until to send a new request"
                 self.pub_man_res.publish(man_msg)
 
-
-
-        if self.state == "EXECUTING_WAIT_POSE": # wait pose 이동 실패시
-            self.safe_place = True
-            if not self.place_cli.send_goal(self.pick_coords, self.safe_place): 
-                self.get_logger().error("🛑 Safety Measures failed.. Breaking Systems, 👷 Manual Assistance Needed") # 추후 시스템 정지, 경고 보내는 기능 여기에 추가
-        
-            self.state = "EXECUTING_PLACE"
-            return
-            
-        elif self.state == "EXECUTING_PLACE": # Place 실패시: Safety Pose 이동 -> 안전 장소에 물체 두기 -> Home Pose 복귀
+        if self.state in ("EXECUTING_WAIT_POSE", "EXECUTING_PLACE"):
             self.msg.data = False # action을 실패했기에 False로 변경
             if not self.move_cli.send_goal_angles(SAFE_ANGLES): # SAFE_ANGLES는 실패 안한다고 가정
                 self.get_logger().error("🛑 Safety Measures failed.. Breaking System, 👷 Manual Assistance Needed") # 추후 시스템 정지, 경고 보내는 기능 여기에 추가
+                # self.state = "BREAK"
             self.state = "EXECUTING_SAFE_MOVE"
             return
 
@@ -591,6 +601,7 @@ class TaskManagerNode(Node):
         self.place_failed = False
         self.str_req_sent = False
         self.pub_once = None
+        self.cnt = 0
 
 
 def main():
