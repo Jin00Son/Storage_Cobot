@@ -166,7 +166,7 @@ class _CommonActionClient:
 # ✅ 개별 Action Client 설정(실제로 import하는 부분)
 # =========================
 
-from jetcobot_interfaces.action import Pick, MoveToPose, Place 
+from smartfactory_interfaces.action import Pick, MoveToPose, Place 
 
 class PickClient(_CommonActionClient):
     """

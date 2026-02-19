@@ -8,9 +8,9 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Header
 
-from jetcobot_interfaces.msg import Part, PartArray
+from smartfactory_interfaces.msg import Part, PartArray
 
-from jetcobot_interfaces.srv import CoordsAngles
+from smartfactory_interfaces.srv import CoordsAngles
 
 from jetcobot_pkg.utils.camera_utils import (
     load_intrinsics,                    # Camera Matrix, Dist Coeff 저장 npz 파일 불러오는 함수

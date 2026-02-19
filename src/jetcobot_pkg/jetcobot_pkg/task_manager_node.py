@@ -7,7 +7,7 @@ from rclpy.node import Node
 
 from std_msgs.msg import Bool, Int32, String
 
-from jetcobot_interfaces.msg import (
+from smartfactory_interfaces.msg import (
     PartArray, 
     SectionResult, 
     StorageRequest, 
@@ -408,7 +408,7 @@ class TaskManagerNode(Node):
                     self.str_req_sent = True
 
                     self.sent_time = time.time()
-                elif time.time() - self.sent_time > REQUEST_TIMEOUT:
+                elif self.sent_time is not None and time.time() - self.sent_time > REQUEST_TIMEOUT:
                     self.str_req_sent = False
                     self.get_logger().warn("Place Request Time Out! Returning to IDLE State")
                     self._reset_to_idle()
@@ -416,6 +416,7 @@ class TaskManagerNode(Node):
                 if self.place_coords is None:
                     return
                 self.sent_time = None
+                self.str_req_sent = False
                 
 
             pick_coords = robust_estimate_coords_mm(self.sample_buf[:SAMPLE_N])
@@ -599,6 +600,7 @@ class TaskManagerNode(Node):
         self.pick_coords = None
         self.place_coords = None
         self.place_failed = False
+        self.sent_time = None
         self.str_req_sent = False
         self.pub_once = None
         self.cnt = 0

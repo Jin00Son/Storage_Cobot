@@ -7,11 +7,11 @@ from rclpy.node import Node
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 
 from std_msgs.msg import Bool
-from jetcobot_interfaces.srv import CoordsAngles
+from smartfactory_interfaces.srv import CoordsAngles
 
-from jetcobot_interfaces.action import Pick
-from jetcobot_interfaces.action import MoveToPose
-from jetcobot_interfaces.action import Place
+from smartfactory_interfaces.action import Pick
+from smartfactory_interfaces.action import MoveToPose
+from smartfactory_interfaces.action import Place
 
 from pymycobot.mycobot280 import MyCobot280
 
@@ -76,7 +76,7 @@ MOVE_TIMEOUT_SEC = 15.0  # 각 모션 최대 허용 시간(원하면 늘려도 �
 # 실제 오차값 --> 최정 보정 오차 (오차가 적용된 frame에 알맞게 값 넣기)
 OFFSET_FRAME = "Target" # OFFSET을 더해주는 기준 frame --> "Base" / "Target"
 SELF_OFFSET_X_MM = 20.0
-SELF_OFFSET_Y_MM = 2.0
+SELF_OFFSET_Y_MM = -3.0
 SELF_OFFSET_Z_MM = 10.0
 
 # 시나리오 맞춤 고정 Z (평면 물체 집기 시나리오)

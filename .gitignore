@@ -35,7 +35,7 @@ Makefile
 data/
 datasets/
 *.csv
-*.zip
+# *.zip
 *.tar
 *.tar.gz
 *.pth
