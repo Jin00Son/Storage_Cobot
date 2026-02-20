@@ -14,9 +14,11 @@ from PyQt6.QtGui import QImage, QPixmap, QPainter, QBrush, QColor, QFont, QPen
 
 os.environ["QT_QPA_PLATFORM"] = "xcb"
 
-# ========================================================
-# [설정] 여기서 토픽 이름만 바꾸면 됨!
-# ========================================================
+##############################################################################
+# Global Configuration
+# DB / Map / Part Mapping
+##############################################################################
+
 
 # 4. DB 설정
 DB_HOST = 'localhost'
@@ -31,8 +33,10 @@ REAL_MAP_HEIGHT_CM = 83
 # 6. 부품 매핑 (ArUco ID -> 구역)
 PART_MAPPING = { 1: 'A', 2: 'B', 3: 'A' }
 
-# ========================================================
-# DB 자동 초기화 함수
+##############################################################################
+# Database System
+# DB initialization / CRUD
+##############################################################################
 def initialize_database():
     """DB 테이블 및 기초 데이터 자동 생성 함수"""
     try:
@@ -102,8 +106,10 @@ def initialize_database():
     except Exception as e:
         print(f"⚠️ [DB 경고] 초기화 중 오류 발생 (무시 가능): {e}")
 
-# ==========================================
-# [카메라] 쓰레드
+##############################################################################
+# Camera System
+# ArUco detection / IP camera / dummy mode
+##############################################################################
 class CameraThread(QThread):
     changePixmap = pyqtSignal(QImage)
     matchFound = pyqtSignal(int) 
@@ -117,7 +123,7 @@ class CameraThread(QThread):
         # aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
         # parameters = aruco.DetectorParameters()
         
-        url = "http://192.168.0.11:5000/video_feed" # 학원
+        url = "http://192.168.0.6:5000/video_feed" # 학원
         cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG) 
         ############## test
         if not cap.isOpened():
@@ -231,8 +237,10 @@ class CameraThread(QThread):
     def stop(self):
         self.running = False; self.wait()
 
-# ==========================================
-# [지도 위젯]
+##############################################################################
+# UI Widgets
+# Map / WarehouseCard / CollapsibleBox
+##############################################################################
 class SimpleMapWidget(QWidget):
     def __init__(self):
         super().__init__()
@@ -323,8 +331,10 @@ class CollapsibleBox(QWidget):
         self.base_title = f"{text}"
         arrow = "▲" if self.toggle_button.isChecked() else "▼"
         self.toggle_button.setText(f"{arrow} {self.base_title}")
-# ==========================================
-# [메인 시스템]
+
+##############################################################################
+# Main Robot Control System
+##############################################################################
 class RobotControlSystem(QWidget):
     def __init__(self, ros_thread):
         super().__init__()
@@ -348,37 +358,20 @@ class RobotControlSystem(QWidget):
             "모듈3": "MODULE_C"
         }
 
-################################################################################################################################################################333    333      
-        #jetcobot class 전역 변수
+        self.initUI()
+        self.ros_thread.robot_update_signal.connect(self.update_ros_data)
+        self.ros_thread.unload_signal.connect(self.handle_unload_event)
+        
+        # Jetcobot 로그 연결 - 추가
+        self.ros_thread.jetco_log_signal.connect(self.add_log)
+        # Jetcobot 클래스 변수
         self.part_id = None
         self.section = None
         self.section_id = None
-################################################################################################################################################################333    333
-
-
-        self.initUI()
-
-
-        self.ros_thread.robot_update_signal.connect(self.update_ros_data)
-        self.ros_thread.unload_signal.connect(self.handle_unload_event)
-        ###############################################################################################################################################################333    #333        
-        # Jetcobot 로그 연결 - 추가
-        self.ros_thread.jetco_log_signal.connect(self.add_log)
-        self.ros_thread.jetco_storage_status_signal.connect(self.on_jetcobot_status_msg)
-
-        # Trigger
-        self.btn_jetco_common1.clicked.connect(self.on_jetco_common1_clicked)
-        self.btn_jetco_common2.clicked.connect(self.on_jetco_common2_clicked)
-        self.btn_jetco_action1.clicked.connect(self.on_jetco_action1_clicked)
-        self.btn_jetco_action2.clicked.connect(self.on_jetco_action2_clicked)
-        self.lbl_part_value.editingFinished.connect(self.on_part_value_edited)
-        self.lbl_slot_value.editingFinished.connect(self.on_slot_value_edited)
-        # self.btn_jetco_manual_pick.clicked.connect(self.on_jetco_manual_pick_clicked)
-        self.btn_jetco_manual_place.clicked.connect(self.on_jetco_manual_place_clicked)
-
-        ################################################################################################################################################################333    333
-        self.ros_thread.start()
         
+        self.ros_thread.start()
+        ######################################################################
+
         self.camera_thread = CameraThread()
         self.camera_thread.changePixmap.connect(self.update_camera_image)
         self.camera_thread.matchFound.connect(self.load_verification_table)
@@ -391,6 +384,11 @@ class RobotControlSystem(QWidget):
         self.timer.timeout.connect(self.load_verification_table)
         self.timer.start(2000)
 
+
+    ##############################################################################
+    # UI Layout & Widget Setup
+    # 버튼 생성 / 시트 구성 / 탭 배치
+    ##############################################################################
     def initUI(self):
         self.setWindowTitle('Smart Factory - Integrated System (Parametrized)')
         self.resize(1400, 900) 
@@ -444,31 +442,8 @@ class RobotControlSystem(QWidget):
         bot_layout.addWidget(self.control_group, 2); bot_layout.addWidget(self.tabs, 8)
         main_layout.addLayout(bot_layout); self.setLayout(main_layout); self.show()
 
-    def handle_unload_event(self, aruco_id):
-        self.add_log(f"출고 신호 수신: ID {aruco_id}")
-        try:
-            conn = mysql.connector.connect(host=DB_HOST, user=DB_USER, password=DB_PASS, database=DB_NAME)
-            cursor = conn.cursor()
-            sql = "UPDATE request_list SET current_qty = GREATEST(current_qty - 1, 0) WHERE aruco_id = %s"
-            cursor.execute(sql, (aruco_id,))
-            sql_free = "UPDATE warehouse_slots SET is_occupied=0, current_part_id=NULL WHERE current_part_id=%s LIMIT 1"
-            cursor.execute(sql_free, (aruco_id,))
-            conn.commit(); conn.close()
-            self.load_verification_table()
-            self.add_log(f"출고 및 슬롯 해제 완료: ID {aruco_id}")
-        except Exception as e: print(f"DB Error: {e}")
-
-    def on_slot_allocated(self, slot_id):
-        self.add_log(f"📍 빈 슬롯 찾음: {slot_id} -> 로봇팔 전송")
-        self.ros_thread.send_arm_target(slot_id)
-
-    def on_tab_changed(self, index):
-        if index == 2: 
-            self.map_widget.hide(); self.control_group.hide()
-            self.load_verification_table(); self.load_quote_history() 
-        else: 
-            self.map_widget.show(); self.control_group.show()
-
+    ######################################################################
+    # UI button 관리
     def setup_status_tab(self):
         layout = QVBoxLayout()
         self.info_label = QLabel("왼쪽 메뉴에서 로봇을 선택해주세요.")
@@ -509,46 +484,50 @@ class RobotControlSystem(QWidget):
             self.pinky_status_labels[rid] = lbl
 
         main_layout_pinky.addLayout(self.robot_status_layout)
-        ####왼쪽 버튼######################################
+
+        # 🔷 왼쪽 버튼
         left_btn_layout = QVBoxLayout()
         self.pinky_all_btn1 = QPushButton("작업 시작")
-        self.pinky_all_btn1.clicked.connect(self.on_load_complete) ## 연결필요!!!
+        self.pinky_all_btn1.clicked.connect(lambda _, b=self.pinky_all_btn1: self.apply_click_feedback(b))
+        self.pinky_all_btn1.clicked.connect(self.on_start_random_assignment) #지니      
 
         self.pinky_all_btn2 = QPushButton("작업종료")
-        self.pinky_all_btn2.clicked.connect(self.on_load_complete) ## 연결필요!!!
+        self.pinky_all_btn2.clicked.connect(lambda _, b=self.pinky_all_btn2: self.apply_click_feedback(b))
+        self.pinky_all_btn2.clicked.connect(self.on_stop_all_assignments) #지니
 
         self.pinky_all_btn3 = QPushButton("test_ bnt")
+        self.pinky_all_btn3.clicked.connect(lambda _, b=self.pinky_all_btn3: self.apply_click_feedback(b))
         self.pinky_all_btn3.clicked.connect(self.on_load_complete) ## 연결필요!!!
 
+
         for btn in [self.pinky_all_btn1, self.pinky_all_btn2, self.pinky_all_btn3]:
-            btn.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold; padding: 10px;")
-            btn.setMinimumHeight(50)
-            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            left_btn_layout.addWidget(btn)
+            self.setup_primary_button(btn, left_btn_layout)
 
         left_btn_layout.addStretch()
 
-        ####오른쪽버튼##################################
+        # 🔷 오른쪽버튼
         self.pinky_content_area = QFrame()
-        self.pinky_content_area.setStyleSheet("background-color: white;")
         right_layout = QVBoxLayout(self.pinky_content_area)
 
-        self.right_btn1 = QPushButton("우측 버튼1")
-        self.right_btn1.clicked.connect(self.on_load_complete) ## 연결필요!!!
-        self.right_btn2 = QPushButton("우측 버튼2")
-        self.right_btn2.clicked.connect(self.on_load_complete) ## 연결필요!!!
-        self.right_btn3 = QPushButton("우측 버튼3")
-        self.right_btn3.clicked.connect(self.on_load_complete) ## 연결필요!!!
-        self.right_btn4 = QPushButton("우측 버튼4")
-        self.right_btn4.clicked.connect(self.on_load_complete) ## 연결필요!!!
+        self.right_btn1 = QPushButton("부품 상차 완료")
+        self.right_btn1.clicked.connect(lambda _, b=self.right_btn1: self.apply_click_feedback(b))
+        self.right_btn1.clicked.connect(lambda: self.send_done_by_role("1", "load")) #지니
+        
+        self.right_btn2 = QPushButton("모듈 입고 완료")
+        self.right_btn2.clicked.connect(lambda _, b=self.right_btn2: self.apply_click_feedback(b))
+        self.right_btn2.clicked.connect(lambda: self.send_done_by_role("3", "unload")) #지니
 
+        self.right_btn3 = QPushButton("모듈 상차 완료")
+        self.right_btn3.clicked.connect(lambda _, b=self.right_btn3: self.apply_click_feedback(b))
+        self.right_btn3.clicked.connect(lambda: self.send_done_by_role("4", "load")) #지니
+
+        self.right_btn4 = QPushButton("모듈 출고 완료")
+        self.right_btn4.clicked.connect(lambda _, b=self.right_btn4: self.apply_click_feedback(b))
+        self.right_btn4.clicked.connect(lambda: self.send_done_by_role("4", "unload")) #지니
+        
         for btn in [self.right_btn1, self.right_btn2, self.right_btn3, self.right_btn4]:
-            btn.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold; padding: 10px;")
-            btn.setMinimumHeight(50)
-            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self.setup_primary_button(btn, right_layout)
 
-        right_layout.addWidget(self.right_btn1)
-        right_layout.addWidget(self.right_btn2)
         bottom_row_layout = QHBoxLayout()
         bottom_row_layout.addWidget(self.right_btn3)
         bottom_row_layout.addWidget(self.right_btn4)
@@ -563,7 +542,7 @@ class RobotControlSystem(QWidget):
 
         ######pinky 선택 패널##################################
         self.pinky_shared_panel = QFrame()
-        self.pinky_shared_panel.setStyleSheet("background-color: #F9F9F9; border-radius: 8px; border: 1px solid #DDD;")
+        self.pinky_shared_panel.setStyleSheet("background-color: #F0F8FF; border-radius: 8px; border: 1px solid #90CAF9;")
         grid = QGridLayout(self.pinky_shared_panel)
         grid.setSpacing(10)
         grid.setContentsMargins(20, 20, 20, 20)
@@ -578,21 +557,26 @@ class RobotControlSystem(QWidget):
         
         # [상/하차 완료 버튼]
         btn_layout = QHBoxLayout()
-        self.btn_load_complete = QPushButton("상차 완료"); self.btn_load_complete.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold; padding: 10px;")
-        self.btn_load_complete.setMinimumHeight(50)
+        self.btn_load_complete = QPushButton("상차 완료")
+        self.btn_load_complete.clicked.connect(lambda _, b=self.btn_load_complete: self.apply_click_feedback(b))
         self.btn_load_complete.clicked.connect(self.on_load_complete) 
 
-        self.btn_unload_complete = QPushButton("하차 완료"); self.btn_unload_complete.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 10px;")
-        self.btn_unload_complete.setMinimumHeight(50)
+        self.btn_unload_complete = QPushButton("하차 완료")
+        self.btn_unload_complete.clicked.connect(lambda _, b=self.btn_unload_complete: self.apply_click_feedback(b))
         self.btn_unload_complete.clicked.connect(self.on_unload_complete)
-        btn_layout.addWidget(self.btn_load_complete); btn_layout.addWidget(self.btn_unload_complete)
+
+        for btn in [self.btn_load_complete, self.btn_unload_complete]:
+            self.setup_primary_button(btn)
+
+        btn_layout.addWidget(self.btn_load_complete)
+        btn_layout.addWidget(self.btn_unload_complete)
         grid.addLayout(btn_layout, 4, 0, 1, 2)
 
         # 5:5 분할 (수동조작 / 자동이동)
         control_nav_layout = QHBoxLayout()
 
         # 1. 왼쪽: 수동 조작 (십자 형태)
-        self.grp_manual = QGroupBox("수동 조작") # self로 변경
+        self.grp_manual = QGroupBox("Manual") # self로 변경
         grid_manual = QGridLayout()
         
         def style_manual_btn(btn):
@@ -602,17 +586,28 @@ class RobotControlSystem(QWidget):
             return btn
 
         btn_up = style_manual_btn(QPushButton("▲"))
-        btn_down = style_manual_btn(QPushButton("▼"))
-        btn_left = style_manual_btn(QPushButton("◀"))
-        btn_right = style_manual_btn(QPushButton("▶"))
-        btn_stop = style_manual_btn(QPushButton("Stop"))
-        btn_stop.setStyleSheet("color: white; background-color: #F44336; font-weight: bold; border-radius: 5px;")
-        
+        btn_up.clicked.connect(lambda _, b=btn_up: self.apply_click_feedback(b))
         btn_up.clicked.connect(lambda: self.send_manual_cmd("FORWARD"))
+
+        btn_down = style_manual_btn(QPushButton("▼"))
+        btn_down.clicked.connect(lambda _, b=btn_down: self.apply_click_feedback(b))
         btn_down.clicked.connect(lambda: self.send_manual_cmd("BACKWARD"))
+
+        btn_left = style_manual_btn(QPushButton("◀"))
+        btn_left.clicked.connect(lambda _, b=btn_left: self.apply_click_feedback(b))
         btn_left.clicked.connect(lambda: self.send_manual_cmd("LEFT"))
+
+        btn_right = style_manual_btn(QPushButton("▶"))
+        btn_right.clicked.connect(lambda _, b=btn_right: self.apply_click_feedback(b))
         btn_right.clicked.connect(lambda: self.send_manual_cmd("RIGHT"))
+
+        btn_stop = style_manual_btn(QPushButton("Stop"))
+        btn_stop.clicked.connect(lambda _, b=btn_stop: self.apply_click_feedback(b))
         btn_stop.clicked.connect(lambda: self.send_manual_cmd("STOP"))
+        
+
+        for btn in [btn_up, btn_down, btn_left, btn_right, btn_stop]:
+            self.setup_primary_button(btn)
 
         grid_manual.addWidget(btn_up, 0, 1)
         grid_manual.addWidget(btn_left, 1, 0)
@@ -622,28 +617,33 @@ class RobotControlSystem(QWidget):
         self.grp_manual.setLayout(grid_manual)
 
         # 2. 오른쪽: 자동 이동 (검수대, 창고, 조립대)
-        self.grp_nav = QGroupBox("자동 이동") # self로 변경
-        vbox_nav = QVBoxLayout()
+        self.grp_nav = QWidget()
+        vbox_nav = QVBoxLayout(self.grp_nav)
         
         def style_nav_btn(btn):
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             btn.setMinimumHeight(45)
             return btn
 
-        btn_inspect = style_nav_btn(QPushButton("검수대"))
-        btn_assembly = style_nav_btn(QPushButton("조립대"))
-        btn_parts = style_nav_btn(QPushButton("모듈 창고"))
+        btn_standby = style_nav_btn(QPushButton("대기장소"))
+        btn_standby.clicked.connect(lambda _, b=btn_standby: self.apply_click_feedback(b))
+        btn_standby.clicked.connect(lambda _, b=btn_standby: self.send_nav_cmd("INSPECTION_ZONE", b))
         
-
-        # 버튼 클릭 시 색상 변경 및 상태 메시지 업데이트
+        btn_inspect = style_nav_btn(QPushButton("검수대"))
+        btn_inspect.clicked.connect(lambda _, b=btn_inspect: self.apply_click_feedback(b))
         btn_inspect.clicked.connect(lambda _, b=btn_inspect: self.send_nav_cmd("INSPECTION_ZONE", b))
+        
+        btn_assembly = style_nav_btn(QPushButton("조립대"))
+        btn_assembly.clicked.connect(lambda _, b=btn_assembly: self.apply_click_feedback(b))
         btn_assembly.clicked.connect(lambda _, b=btn_assembly: self.send_nav_cmd("ASSEMBLY_ZONE", b))
+        
+        btn_parts = style_nav_btn(QPushButton("모듈 창고"))
+        btn_parts.clicked.connect(lambda _, b=btn_parts: self.apply_click_feedback(b))
         btn_parts.clicked.connect(lambda _, b=btn_parts: self.send_nav_cmd("PARTS_WAREHOUSE", b))
 
-        vbox_nav.addWidget(btn_inspect)
-        vbox_nav.addWidget(btn_assembly)
-        vbox_nav.addWidget(btn_parts)
-        self.grp_nav.setLayout(vbox_nav)
+
+        for btn in [btn_standby, btn_inspect, btn_assembly, btn_parts]:
+            self.setup_primary_button(btn, vbox_nav)
 
         control_nav_layout.addWidget(self.grp_manual, 1)
         control_nav_layout.addWidget(self.grp_nav, 1)
@@ -653,9 +653,7 @@ class RobotControlSystem(QWidget):
         ################################################
         # 🔷 manipulator 전체 전용 패널
         self.jetcobot_shared_panel = QFrame()
-        self.jetcobot_shared_panel.setStyleSheet(
-            "background-color: #FFF3E0; border-radius: 8px; border: 1px solid #FFB74D;"
-        )
+        self.pinky_shared_panel.setStyleSheet("background-color: #F0F8FF; border-radius: 8px; border: 1px solid #90CAF9;")
 
         # 🔹 전체를 세로로 구성
         main_jet_layout = QVBoxLayout(self.jetcobot_shared_panel)
@@ -676,49 +674,52 @@ class RobotControlSystem(QWidget):
         font_title = QFont("Arial", 12, QFont.Weight.Bold)
         font_val = QFont("Arial", 14, QFont.Weight.Bold)
 
-        t1 = QLabel("상태 :")
-        t1.setFont(font_title)
-        self.lbl_jetco_status = QLabel("-")
-        self.lbl_jetco_status.setFont(font_val)
-        self.lbl_jetco_status.setStyleSheet("color:#D84315;")
+        lbl_jetco_status = QLabel("상태 :")
+        self.style_info_label(lbl_jetco_status)
+        self.lbl_jetco_status_value = QLabel("-")
+        self.style_info_label(self.lbl_jetco_status_value)
 
-        t2 = QLabel("모드 :")
-        t2.setFont(font_title)
-        self.lbl_jetco_mode = QLabel("-")
-        self.lbl_jetco_mode.setFont(font_val)
-        self.lbl_jetco_mode.setStyleSheet("color:#1565C0;")
+        lbl_jetco_mode = QLabel("모드 :")
+        self.style_info_label(lbl_jetco_mode)
+        self.style_info_label(t2)
+        self.lbl_jetco_mode_vale = QLabel("-")
+        self.style_info_label(self.lbl_jetco_mode_vale)
 
-        left_status_layout.addWidget(t1)
-        left_status_layout.addWidget(self.lbl_jetco_status)
-        left_status_layout.addSpacing(30)
-        left_status_layout.addWidget(t2)
-        left_status_layout.addWidget(self.lbl_jetco_mode)
+        left_status_layout.addWidget(lbl_jetco_status)
+        left_status_layout.addSpacing(10)
+        left_status_layout.addWidget(self.lbl_jetco_status_value)
+        left_status_layout.addSpacing(10)
+        left_status_layout.addWidget(lbl_jetco_mode)
+        left_status_layout.addSpacing(10)
+        left_status_layout.addWidget(self.lbl_jetco_mode_vale)
 
-        
-########################################################################################################################
-
+    
         # ===== 오른쪽 그룹 (storage 전용)
         right_status_layout = QHBoxLayout()
 
         self.lbl_slot_title = QLabel("slot_id :")
-        self.lbl_slot_title.setFont(font_title)
+        self.style_info_label(self.lbl_slot_title)
 
-        self.lbl_slot_value = QLineEdit(self) # LineEdit으로 변경
-        self.lbl_slot_value.setFont(font_val)
+        self.lbl_slot_value = QLineEdit(self)
+        self.style_info_label(self.lbl_slot_value)
+        self.lbl_slot_value.editingFinished.connect(self.on_slot_value_edited)
 
         self.lbl_part_title = QLabel("part_id :")
-        self.lbl_part_title.setFont(font_title)
+        self.style_info_label(self.lbl_part_title)
 
-        self.lbl_part_value = QLineEdit(self) # LineEdit으로 변경
-        self.lbl_part_value.setFont(font_val)
+        self.lbl_part_value = QLineEdit(self)
+        self.style_info_label(self.lbl_part_value)
+        self.lbl_part_value.editingFinished.connect(self.on_part_value_edited)
 
         right_status_layout.addWidget(self.lbl_slot_title)
+        right_status_layout.addSpacing(10)
         right_status_layout.addWidget(self.lbl_slot_value)
-        right_status_layout.addSpacing(30)
+        right_status_layout.addSpacing(10)
         right_status_layout.addWidget(self.lbl_part_title)
+        right_status_layout.addSpacing(10)
         right_status_layout.addWidget(self.lbl_part_value)
 
-########################################################################################################################
+
         # ===== 좌우 배치
         status_layout.addLayout(left_status_layout, 1)
         status_layout.addLayout(right_status_layout, 1)
@@ -731,27 +732,28 @@ class RobotControlSystem(QWidget):
 
         # 왼쪽 버튼 영역
         left_layout = QVBoxLayout()
-        self.btn_jetco_common1 = QPushButton("p&p start")
+        self.btn_jetco_common1 = QPushButton("pnp start")
+        self.btn_jetco_common1.clicked.connect(self.handle_jetco_common1)
+        
         self.btn_jetco_common2 = QPushButton("test_btn")
+        self.btn_jetco_common2.clicked.connect(self.handle_jetco_common2)
 
         for btn in [self.btn_jetco_common1, self.btn_jetco_common2]:
-            btn.setMinimumHeight(50)
-            btn.setStyleSheet("background-color:#FB8C00; color:white; font-weight:bold;")
-            left_layout.addWidget(btn)
-
+            self.setup_primary_button(btn, left_layout)
+            
         left_layout.addStretch()
 
         # 오른쪽 버튼 영역
         right_layout = QVBoxLayout()
         self.btn_jetco_action1 = QPushButton("Action1")
-        self.btn_jetco_action1.clicked.connect(self.handle_send)
+        self.btn_jetco_action1.clicked.connect(self.handle_jetco_action1)
         self.btn_jetco_action2 = QPushButton("Action2")
-
+        self.btn_jetco_action2.clicked.connect(self.handle_jetco_action2)
+        
         for btn in [self.btn_jetco_action1, self.btn_jetco_action2]:
-            btn.setMinimumHeight(50)
-            btn.setStyleSheet("background-color:#EF6C00; color:white; font-weight:bold;")
-            right_layout.addWidget(btn)
-########################################################################################################################
+            self.setup_primary_button(btn, right_layout)
+            
+
         # assembly 전용 토글
         self.assembly_box = CollapsibleBox("Assembly 선택")
         for i in range(1, 4):
@@ -765,11 +767,11 @@ class RobotControlSystem(QWidget):
         self.btn_jetco_manual_place = QPushButton(f"Place")
         self.manual_request_box.add_widget(self.btn_jetco_manual_pick)
         self.manual_request_box.add_widget(self.btn_jetco_manual_place)
+        # self.btn_jetco_manual_pick.clicked.connect(self.on_jetco_manual_pick_clicked)
+        self.btn_jetco_manual_place.clicked.connect(self.on_jetco_manual_place_clicked)
 
-        right_layout.addWidget(self.manual_request_box)
-########################################################################################################################
         right_layout.addWidget(self.assembly_box)
-
+        right_layout.addWidget(self.manual_request_box)
 
         right_layout.addStretch()
 
@@ -782,7 +784,6 @@ class RobotControlSystem(QWidget):
 
         ##############################################3
 
-
         layout.addWidget(self.pinky_shared_panel)
         layout.addWidget(self.jetcobot_shared_panel)
         self.jetcobot_shared_panel.hide()
@@ -790,115 +791,117 @@ class RobotControlSystem(QWidget):
         layout.addStretch(1)
         self.tab_status.setLayout(layout)
 
-    # [수동 조작 명령 전송 함수]
-    def send_manual_cmd(self, direction):
-        if self.current_viewing_robot:
-            self.add_log(f"[{self.current_viewing_robot}] 수동 조작: {direction}")
-        else:
-            QMessageBox.warning(self, "오류", "로봇을 먼저 선택해주세요.")
+    # 🔷 jetcobot 왼쪽 button1 분기
+    def handle_jetco_common1(self):
+        self.apply_click_feedback(self.sender())
+        
+        if not self.current_viewing_robot:
+            QMessageBox.warning(self, "오류", "로봇을 먼저 선택하세요")
+            return
 
-    # 자동 이동 명령 전송 함수
-    def send_nav_cmd(self, location, button_obj=None):
-        if self.current_viewing_robot:
-            # 1. 로그 출력
-            self.add_log(f"[{self.current_viewing_robot}] 자동 이동 명령: {location}")
-            
-            # 2. 상태 메시지 업데이트
-            target_name = ""
-            if location == "INSPECTION_ZONE": target_name = "검수대 이동중"
-            elif location == "PARTS_WAREHOUSE": target_name = "부품창고 이동중"
-            elif location == "ASSEMBLY_ZONE": target_name = "조립대 이동중"
-            self.lbl_state.setText(target_name)
-
-            # 3. 버튼 깜빡임 효과
-            if button_obj:
-                original_style = button_obj.styleSheet()
-                # 눌렸을 때 스타일 (초록색)
-                button_obj.setStyleSheet("background-color: #4CAF50; color: white; border: 2px solid #388E3C; font-weight: bold;")
-                # 0.5초(500ms) 후에 원래 스타일로 복귀
-                QTimer.singleShot(500, lambda: button_obj.setStyleSheet(original_style))
-                
-        else:
-            QMessageBox.warning(self, "오류", "로봇을 먼저 선택해주세요.")
-# ros2_thread connection method
-##############################################################################
-    def on_load_complete(self): 
-        if self.current_viewing_robot:
-            self.ros_thread.send_load_done(self.current_viewing_robot)
-            self.add_log(f"명령 전송: {self.current_viewing_robot} -> /load_done True")
-            QMessageBox.information(self, "명령", "상차 완료 명령 전송")
-
-    def on_unload_complete(self): 
-        if self.current_viewing_robot:
-            self.ros_thread.send_unload_done(self.current_viewing_robot)
-            self.add_log(f"명령 전송: {self.current_viewing_robot} -> /unload_done True")
-            QMessageBox.information(self, "명령", "하차 완료 명령 전송")
-    
-##########################################################################################################츄가#############################################츄가
-
-    # assembly 전용 토글
-    def select_module(self, module_name):
-        if self.current_viewing_robot == "jetcobot2":
-            self.selected_module = module_name
-            self.assembly_box.set_selected(module_name)
-
-    # assembly 전용 토글 - send 버튼 연결
-    def handle_send(self):
-        if self.current_viewing_robot == "jetcobot2":
-            if not self.selected_module:
-                QMessageBox.warning(self, "오류", "모듈을 먼저 선택하세요")
-                return
-
-            module_code = self.module_map[self.selected_module]
-            # self.ros_thread.send_module_command(module_code)
-            self.add_log(f"{self.current_viewing_robot} -> {module_code} 명령 전송")
-            QMessageBox.information(self, "명령", f"{self.selected_module} 명령 전송 완료")
-
-    def on_jetco_common1_clicked(self):
-        # jetcobot1 화면일 때만 동작
-        if self.current_viewing_robot == "jetcobot1":
-            # 실제 publish는 ros_thread에게 위임
+        if self.current_viewing_robot == "jetcobot1": # storage
             self.ros_thread.send_storage_manip_start()
             self.add_log("[jetcobot1] /jetcobot/storage/boot True publish")
             return
-        elif self.current_viewing_robot == "jetcobot2":
-            # 실제 publish는 ros_thread에게 위임
+        elif self.current_viewing_robot == "jetcobot2": # assembly
             self.ros_thread.send_assembly_manip_start()
             self.add_log("[jetcobot] /jetcobot/storage/boot True publish")
             return
+
+        elif self.current_viewing_robot == "jetcobot3": # openmanipulator
+            self.add_log("OpenManipulator → PNP START")
+            self.ros_thread.send_manip_start()
+
+        else:
+            QMessageBox.warning(self, "오류", "지원되지 않는 로봇")
+
+    # 🔷 jetcobot 왼쪽 button2 분기
+    def handle_jetco_common2(self):
+        self.apply_click_feedback(self.sender())
         
-    def on_jetco_common2_clicked(self):
-        # jetcobot1 화면일 때만 동작
-        if self.current_viewing_robot == "jetcobot1":
-            # 실제 publish는 ros_thread에게 위임
-            self.ros_thread.send_storage_manip_stop()
-            self.add_log("[jetcobot1] /jetcobot/storage/start publish")
+        if not self.current_viewing_robot:
+            QMessageBox.warning(self, "오류", "로봇을 먼저 선택하세요")
             return
 
-    def on_jetco_action1_clicked(self):
-        # jetcobot1 화면일 때만 동작
-        if self.current_viewing_robot == "jetcobot1":
-            # 실제 publish는 ros_thread에게 위임
+        if self.current_viewing_robot == "jetcobot1": # storage
+            self.ros_thread.send_storage_manip_stop()
+            self.add_log("[jetcobot1] /jetcobot/storage/boot False publish")
+            return
+
+        elif self.current_viewing_robot == "jetcobot2": # assembly
+            self.add_log("Assembly Jetcobot → PNP START")
+            # self.ros_thread.send_assembly_pnp()
+
+        elif self.current_viewing_robot == "jetcobot3": # openmanipulator
+            self.add_log("OpenManipulator → PNP START")
+            # self.ros_thread.
+
+        else:
+            QMessageBox.warning(self, "오류", "지원되지 않는 로봇")
+
+    # 🔷 jetcobot 오른쪽 action1 분기
+    def handle_jetco_action1(self):
+        self.apply_click_feedback(self.sender())
+
+        if not self.current_viewing_robot:
+            QMessageBox.warning(self, "오류", "로봇을 먼저 선택하세요")
+            return
+
+        if self.current_viewing_robot == "jetcobot1": # storage
             self.ros_thread.send_storage_auto_pub()
+            if "jetcobot1" not in self.robot_data_storage:
+                self.robot_data_storage["jetcobot1"] = {"id": "jetcobot1"}
+            self.robot_data_storage["jetcobot1"]["mode"] = "AUTO"
+            self.lbl_jetco_mode_vale.setText("AUTO")
             self.add_log("[jetcobot1] /jetcobot/storage/set_mode publish: Auto Mode")
             return
-        elif self.current_viewing_robot == "jetcobot2":
+        
+        elif self.current_viewing_robot == "jetcobot2": # assembly
             self.ros_thread.send_assembly_assembly_stack_request_pub(int(self.selected_module[2]))
             self.add_log("[jetcobot2] /jetcobot/assembly/stack/request publish")
             return
 
-        
-        
-    def on_jetco_action2_clicked(self):
-        # jetcobot1 화면일 때만 동작
-        if self.current_viewing_robot == "jetcobot1":
-            # 실제 publish는 ros_thread에게 위임
+        elif self.current_viewing_robot == "jetcobot3": # openmanipulator
+            self.add_log("OpenManipulator → PNP START")
+            # self.ros_thread.
+
+        else:
+            QMessageBox.warning(self, "오류", "지원되지 않는 로봇")
+
+    # 🔷 jetcobot 오른쪽 action2 분기
+    def handle_jetco_action2(self):
+        self.apply_click_feedback(self.sender())
+
+        if not self.current_viewing_robot:
+            QMessageBox.warning(self, "오류", "로봇을 먼저 선택하세요")
+            return
+
+        if self.current_viewing_robot == "jetcobot1": # storage
             self.ros_thread.send_storage_manual_pub()
+            if "jetcobot1" not in self.robot_data_storage:
+                self.robot_data_storage["jetcobot1"] = {"id": "jetcobot1"}
+            self.robot_data_storage["jetcobot1"]["mode"] = "MANUAL"
+            self.lbl_jetco_mode_vale.setText("MANUAL")
             self.add_log("[jetcobot1] /jetcobot/storage/set_mode publish: Manual Mode")
             return
-        
+
+        elif self.current_viewing_robot == "jetcobot2": # assembly
+            self.add_log("Assembly Jetcobot → PNP START")
+            # self.ros_thread.
+
+        elif self.current_viewing_robot == "jetcobot3": # openmanipulator
+            self.add_log("OpenManipulator → PNP START")
+            # self.ros_thread.
+
+        else:
+            QMessageBox.warning(self, "오류", "지원되지 않는 로봇")
+
+    # 🔷 storage 수동 명령 토글
     def on_jetco_manual_place_clicked(self):
         if self.current_viewing_robot == "jetcobot1":
+            if self.part_id is None or self.section is None or self.section_id is None:
+                QMessageBox.warning(self, "입력 오류", "part_id와 slot_id(A-1)를 올바르게 입력하세요.")
+                return
             # 실제 publish는 ros_thread에게 위임``
             self.ros_thread.send_storage_manual_request_place(self.part_id, self.section, self.section_id)
             #초기화
@@ -909,136 +912,41 @@ class RobotControlSystem(QWidget):
             return
         
     def on_part_value_edited(self):
-        self.part_id = int(self.lbl_part_value.text())
+        text = self.lbl_part_value.text().strip()
+        if not text:
+            self.part_id = None
+            return
+
+        try:
+            self.part_id = int(text)
+        except ValueError:
+            self.part_id = None
+            self.add_log("[입력오류] part_id는 숫자여야 합니다.")
 
     def on_slot_value_edited(self): # 입력 데이터는 A-1 꼴로 고정
-        self.section = str(self.lbl_slot_value.text()[0])
-        self.section_id = int(self.lbl_slot_value.text()[2])
+        text = self.lbl_slot_value.text().strip().upper()
+        if not text:
+            self.section = None
+            self.section_id = None
+            return
 
+        parts = text.split("-", 1)
+        if len(parts) != 2:
+            self.section = None
+            self.section_id = None
+            self.add_log("[입력오류] slot_id 형식은 A-1 입니다.")
+            return
 
-        
-    def update_jetcobot1_status(self, status_text=None, mode_text=None, slot_id=None, part_id=None):
-        # jetcobot1 화면일 때만 갱신
-        if self.current_viewing_robot == "jetcobot1":
-            if status_text is not None:
-                self.lbl_jetco_status.setText(str(status_text))
-            if mode_text is not None:
-                self.lbl_jetco_mode.setText(str(mode_text))
-            if slot_id is not None:
-                self.lbl_slot_value.setText(str(slot_id))
-            if part_id is not None:
-                self.lbl_part_value.setText(str(part_id))
+        section, section_id_text = parts[0], parts[1]
+        if len(section) != 1 or not section.isalpha() or not section_id_text.isdigit():
+            self.section = None
+            self.section_id = None
+            self.add_log("[입력오류] slot_id 형식은 A-1 입니다.")
+            return
 
-    def on_jetcobot_status_msg(self, status: str):
-        self.update_jetcobot1_status(
-            status_text=status,
-        )
+        self.section = section
+        self.section_id = int(section_id_text)
 
-
-
-##########################################################################################################츄가#############################################츄가
-    # ros2 trigger node test
-    def trigger_manip_start(self):
-        self.ros_thread.send_manip_start()
-
-    def select_robot(self, robot_id):
-        self.current_viewing_robot = robot_id.lower().replace(" ", "")
-        
-        self.info_label.hide()
-        self.tabs.setCurrentIndex(0)
-        self.pinky_all_panel.hide()
-        self.pinky_shared_panel.hide()
-        self.jetcobot_shared_panel.hide()
-
-        if robot_id == "main_control":
-            self.pinky_all_panel.show()
-
-        elif "pinky" in robot_id:
-            self.pinky_shared_panel.show()
-
-        elif "jetcobot" in robot_id:
-            self.jetcobot_shared_panel.show()
-#######################################################################################################################################
-            if robot_id == "jetcobot1":  # storage
-                self.btn_jetco_action1.setText("Auto_Mode")
-                self.btn_jetco_action2.setText("Manual_Mode")
-
-                self.lbl_slot_title.show()
-                self.lbl_slot_value.show()
-                self.lbl_part_title.show()
-                self.lbl_part_value.show()
-
-                self.assembly_box.hide()
-                self.manual_request_box.show()
-
-            elif robot_id == "jetcobot2":  # assembly
-                self.btn_jetco_action1.setText("send")
-                self.btn_jetco_action2.setText("test_btn1")
-
-                self.lbl_slot_title.hide()
-                self.lbl_slot_value.hide()
-                self.lbl_part_title.hide()
-                self.lbl_part_value.hide()
-
-                self.assembly_box.show()
-                self.manual_request_box.hide()
-#######################################################################################################################################
-            elif robot_id == "jetcobot3":
-                self.btn_jetco_action1.setText("test_btn1")
-                self.btn_jetco_action2.setText("test_btn2")
-
-                self.lbl_slot_title.hide()
-                self.lbl_slot_value.hide()
-                self.lbl_part_title.hide()
-                self.lbl_part_value.hide()
-
-                self.assembly_box.hide()
-                self.manual_request_box.hide()
-
-        is_pinky = "pinky" in self.current_viewing_robot
-        self.btn_load_complete.setVisible(is_pinky); self.btn_unload_complete.setVisible(is_pinky)
-        
-        self.grp_manual.setVisible(is_pinky)
-        self.grp_nav.setVisible(is_pinky)
-        
-        if self.current_viewing_robot in self.robot_data_storage: 
-            self.refresh_detail_view(self.robot_data_storage[self.current_viewing_robot])
-        else: 
-            display_name = self.robot_name_map.get(self.current_viewing_robot, self.current_viewing_robot.upper())
-            self.lbl_name.setText(display_name)
-            self.lbl_bat.setText("-"); self.lbl_state.setText("-"); self.lbl_loc.setText("-")
-
-    def update_ros_data(self, data):
-        rid = data.get("id", "")
-        if not rid: return
-        if rid not in self.robot_data_storage: self.robot_data_storage[rid] = {}
-        self.robot_data_storage[rid].update(data)
-        if "location" in data:
-            try:
-                loc = data["location"]
-                x, y = map(int, loc.split(","))
-                self.map_widget.update_position(self.robot_name_map.get(rid, rid), x, y)
-            except: pass
-        if self.current_viewing_robot == rid: 
-            self.refresh_detail_view(self.robot_data_storage[rid])
-
-            ##################3############################################################################################################
-            # ✅ jetcobot1 페이지에서만 storage 상태 라벨 갱신
-            if self.current_viewing_robot == "jetcobot1":
-                self.update_jetcobot1_status_ui(self.robot_data_storage[rid])
-            ################################################################################################################################
-
-    def refresh_detail_view(self, data):
-        rid = data.get("id", "")
-        display_name = self.robot_name_map.get(rid, rid.upper() if rid else "Unknown")
-        
-        self.lbl_name.setText(display_name)
-        if "battery" in data: self.lbl_bat.setText(f"{data['battery']:.2f}%")
-        if "state" in data: self.lbl_state.setText(data['state'])
-        if "location" in data: self.lbl_loc.setText(data['location'])
-
-    def update_camera_image(self, image): self.top_camera_label.setPixmap(QPixmap.fromImage(image))
-    
     def setup_log_tab(self):
         layout = QVBoxLayout()
         self.log_text_edit = QTextEdit(); self.log_text_edit.setReadOnly(True)
@@ -1102,6 +1010,270 @@ class RobotControlSystem(QWidget):
         bot.addWidget(grp_warehouse, 1); bot.addWidget(grp_t, 1)
         main.addLayout(top); main.addLayout(bot)
         self.tab_db.setLayout(main)
+
+    def on_tab_changed(self, index):
+        if index == 2: 
+            self.map_widget.hide(); self.control_group.hide()
+            self.load_verification_table(); self.load_quote_history() 
+        else: 
+            self.map_widget.show(); self.control_group.show()
+
+    # 수동 조작 명령 전송 함수
+    def send_manual_cmd(self, direction):
+        if self.current_viewing_robot:
+            self.add_log(f"[{self.current_viewing_robot}] 수동 조작: {direction}")
+        else:
+            QMessageBox.warning(self, "오류", "로봇을 먼저 선택해주세요.")
+
+    # 자동 이동 명령 전송 함수
+    def send_nav_cmd(self, location, button_obj=None): #지니 
+        if self.current_viewing_robot:
+            role_map = {
+                "INSPECTION_ZONE": "1",
+                "PARTS_WAREHOUSE": "4",
+                "ASSEMBLY_ZONE": "3",
+            }
+            role_id = role_map.get(location)
+            if role_id:
+                self.ros_thread.send_move_role(self.current_viewing_robot, role_id)
+                self.add_log(f"[{self.current_viewing_robot}] 자동 이동 명령: {location} -> /move_role {role_id}")
+                self.refresh_assignment_ui()
+            else:
+                self.add_log(f"[{self.current_viewing_robot}] 자동 이동 명령: {location}")
+            
+            # 2. 상태 메시지 업데이트
+            target_name = ""
+            if location == "INSPECTION_ZONE": target_name = "검수대 이동중"
+            elif location == "PARTS_WAREHOUSE": target_name = "모듈 창고 이동중"
+            elif location == "ASSEMBLY_ZONE": target_name = "조립대 이동중"
+            self.lbl_state.setText(target_name)
+
+                
+        else:
+            QMessageBox.warning(self, "오류", "로봇을 먼저 선택해주세요.")
+          
+    def role_id_to_text(self, role_id): #지니
+        role_map = {
+            "0": "대기",
+            "1": "검수대",
+            "3": "조립대",
+            "4": "모듈 창고",
+        }
+        if role_id is None:
+            return "-"
+        return role_map.get(str(role_id), str(role_id))
+
+    def refresh_assignment_ui(self): #지니
+        assignments = self.ros_thread.robot_role_assignments
+        for rid, display_name in self.robot_name_map.items():
+            label = self.pinky_status_labels.get(rid)
+            if not label:
+                continue
+            role_text = self.role_id_to_text(assignments.get(rid))
+            label.setText(f"{display_name} : {role_text}")
+
+        if self.current_viewing_robot:
+            current_role = assignments.get(self.current_viewing_robot)
+            if current_role is not None:
+                self.lbl_state.setText(self.role_id_to_text(current_role))
+
+  # pinky, Jetcobot toggle 분기
+    def select_robot(self, robot_id):
+        self.current_viewing_robot = robot_id.lower().replace(" ", "")
+        
+        self.info_label.hide()
+        self.tabs.setCurrentIndex(0)
+        self.pinky_all_panel.hide()
+        self.pinky_shared_panel.hide()
+        self.jetcobot_shared_panel.hide()
+        if robot_id == "main_control":
+            self.pinky_all_panel.show()
+
+        elif "pinky" in robot_id:
+            self.pinky_shared_panel.show()
+
+        elif "jetcobot" in robot_id:
+            self.jetcobot_shared_panel.show()
+
+            if robot_id == "jetcobot1":  # storage
+                self.btn_jetco_common1.setText("Start")
+                self.btn_jetco_common2.setText("Shutdown")
+                self.btn_jetco_action1.setText("Auto")
+                self.btn_jetco_action2.setText("Manual")
+                self.btn_jetco_action2.show()
+
+                self.lbl_slot_title.show()
+                self.lbl_slot_value.show()
+                self.lbl_part_title.show()
+                self.lbl_part_value.show()
+
+                self.assembly_box.hide()
+                self.manual_request_box.show()
+
+            elif robot_id == "jetcobot2":  # assembly
+                self.btn_jetco_common1.setText("Start")
+                self.btn_jetco_common2.setText("Shutdown")
+                self.btn_jetco_action1.setText("Send")
+                self.btn_jetco_action2.hide()
+                self.lbl_jetco_mode_vale.setText("MANUAL")
+                if "jetcobot2" not in self.robot_data_storage:
+                    self.robot_data_storage["jetcobot2"] = {"id": "jetcobot2"}
+                self.robot_data_storage["jetcobot2"]["mode"] = "MANUAL"
+
+                self.lbl_slot_title.hide()
+                self.lbl_slot_value.hide()
+                self.lbl_part_title.hide()
+                self.lbl_part_value.hide()
+
+                self.assembly_box.show()
+                self.manual_request_box.hide()
+
+            elif robot_id == "jetcobot3":
+                self.btn_jetco_common1.setText("pnp start")
+                self.btn_jetco_common2.setText("test_btn")
+                self.btn_jetco_action1.setText("test_btn1")
+                self.btn_jetco_action2.setText("test_btn2")
+                self.btn_jetco_action2.show()
+
+                self.lbl_slot_title.hide()
+                self.lbl_slot_value.hide()
+                self.lbl_part_title.hide()
+                self.lbl_part_value.hide()
+
+                self.assembly_box.hide()
+                self.manual_request_box.hide()
+
+        is_pinky = "pinky" in self.current_viewing_robot
+        self.btn_load_complete.setVisible(is_pinky); self.btn_unload_complete.setVisible(is_pinky)
+        
+        self.grp_manual.setVisible(is_pinky)
+        self.grp_nav.setVisible(is_pinky)
+        
+        if self.current_viewing_robot in self.robot_data_storage: 
+            self.refresh_detail_view(self.robot_data_storage[self.current_viewing_robot])
+        else: 
+            display_name = self.robot_name_map.get(self.current_viewing_robot, self.current_viewing_robot.upper())
+            self.lbl_name.setText(display_name)
+            self.lbl_bat.setText("-"); self.lbl_state.setText("-"); self.lbl_loc.setText("-")
+            self.lbl_jetco_status_value.setText("-"); self.lbl_jetco_mode_vale.setText("-") ##
+            self.lbl_slot_value.setText(""); self.lbl_part_value.setText("") ##
+
+    # assembly 전용 토글
+    def select_module(self, module_name):
+        if self.current_viewing_robot == "jetcobot2":
+            self.selected_module = module_name
+            self.assembly_box.set_selected(module_name)
+
+    # log
+    def add_log(self, message):
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        if self.log_text_edit: self.log_text_edit.append(f"[{ts}] {message}")
+
+    ##########################################
+    # button effect, styles Setting
+    ##########################################
+    # button blink effect
+    def apply_click_feedback(self, button_obj):
+        if not button_obj:
+            return
+
+        button_obj.setDown(True)
+
+        button_obj.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                font-weight: bold;
+                padding: 10px;
+                border-radius: 6px;
+            }
+
+            QPushButton:pressed {
+                background-color: #1976D2;
+                padding-top: 12px;
+                padding-left: 12px;
+            }
+        """)
+
+        QTimer.singleShot(
+            120,
+            lambda: button_obj.setDown(False)
+        )
+
+    # Label style 
+    def style_info_label(self, widget):
+        widget.setStyleSheet("""
+            QLabel {
+                background-color: #F0F8FF;
+                border-radius: 8px;
+                border: 1px solid #90CAF9;
+                padding: 4px;
+            }
+        """)
+
+        font = QFont("Arial", 14, QFont.Weight.Bold)
+        widget.setFont(font)
+
+    # Label style1
+    def style_info_label_1(self, widget):
+        widget.setStyleSheet("""
+            QLabel {
+                background-color: #F0F8FF;
+                border-radius: 8px;
+                border: 1px solid #90CAF9;
+                padding: 4px;
+            }
+        """)
+
+        font = QFont("Arial", 14, QFont.Weight.Bold)
+        widget.setFont(font)
+
+    # button stlye
+    def setup_primary_button(self, button, layout=None):
+        button.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                font-weight: bold;
+                padding: 10px;
+                border-radius: 6px;
+            }
+            QPushButton:pressed {
+                background-color: #1976D2;
+            }
+        """)
+
+        button.setMinimumHeight(50)
+        button.setSizePolicy(QSizePolicy.Policy.Expanding,
+                            QSizePolicy.Policy.Fixed)
+
+        if layout is not None:
+            layout.addWidget(button)
+
+
+    ##############################################################################
+    # Button Event Handlers
+    # 버튼에 연결되는 실제 동작 로직
+    ##############################################################################
+
+    # camera
+    def update_camera_image(self, image): self.top_camera_label.setPixmap(QPixmap.fromImage(image))
+    
+
+    # MYSLQ DB #############################################################
+    def handle_unload_event(self, aruco_id):
+        self.add_log(f"출고 신호 수신: ID {aruco_id}")
+        try:
+            conn = mysql.connector.connect(host=DB_HOST, user=DB_USER, password=DB_PASS, database=DB_NAME)
+            cursor = conn.cursor()
+            sql = "UPDATE request_list SET current_qty = GREATEST(current_qty - 1, 0) WHERE aruco_id = %s"
+            cursor.execute(sql, (aruco_id,))
+            sql_free = "UPDATE warehouse_slots SET is_occupied=0, current_part_id=NULL WHERE current_part_id=%s LIMIT 1"
+            cursor.execute(sql_free, (aruco_id,))
+            conn.commit(); conn.close()
+            self.load_verification_table()
+            self.add_log(f"출고 및 슬롯 해제 완료: ID {aruco_id}")
+        except Exception as e: print(f"DB Error: {e}")
 
     def on_history_cell_clicked(self, row, col):
         item = self.history_table.item(row, 0)
@@ -1217,6 +1389,7 @@ class RobotControlSystem(QWidget):
             conn.close()
         except Exception as e: 
             print(f"Update Error: {e}")
+    ########################################################################
 
     def reset_db(self):
         if QMessageBox.question(self, '확인', '초기화?', QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
@@ -1230,10 +1403,118 @@ class RobotControlSystem(QWidget):
                 QMessageBox.information(self, "완료", "초기화됨"); self.add_log("데이터 초기화됨")
             except Exception: pass
 
-    def add_log(self, message):
-        ts = datetime.datetime.now().strftime("%H:%M:%S")
-        if self.log_text_edit: self.log_text_edit.append(f"[{ts}] {message}")
-
     def closeEvent(self, event):
-        self.ros_thread.stop(); self.camera_thread.stop()
+        self.ros_thread.stop()
+        self.camera_thread.stop()
         event.accept()
+
+    ##############################################################################            
+    # ros_thread connection method
+    ##############################################################################
+
+    # GUI Robot State Update System
+    def update_ros_data(self, data):
+        rid = data.get("id", "")
+        if not rid: return
+        if rid not in self.robot_data_storage: self.robot_data_storage[rid] = {}
+        self.robot_data_storage[rid].update(data)
+        if "location" in data:
+            try:
+                loc = data["location"]
+                x, y = map(int, loc.split(","))
+                self.map_widget.update_position(self.robot_name_map.get(rid, rid), x, y)
+            except: pass
+        if self.current_viewing_robot == rid: 
+            self.refresh_detail_view(self.robot_data_storage[rid])
+
+    def refresh_detail_view(self, data):
+        rid = data.get("id", "")
+        display_name = self.robot_name_map.get(rid, rid.upper() if rid else "Unknown")
+        
+        self.lbl_name.setText(display_name)
+        self.lbl_bat.setText("-"); self.lbl_state.setText("-"); self.lbl_loc.setText("-") ##
+        self.lbl_jetco_status_value.setText("-"); self.lbl_jetco_mode_vale.setText("-") ##
+        if "battery" in data: self.lbl_bat.setText(f"{data['battery']:.2f}%")
+        if "state" in data: self.lbl_state.setText(data['state'])
+        if "location" in data: self.lbl_loc.setText(data['location'])
+        if "status" in data: self.lbl_jetco_status_value.setText(data["status"])
+        if "mode" in data: self.lbl_jetco_mode_vale.setText(data["mode"])
+        if rid == "jetcobot2": self.lbl_jetco_mode_vale.setText("MANUAL")
+        if "slot_id" in data: self.lbl_slot_value.setText(str(data["slot_id"]))
+        elif "slot" in data: self.lbl_slot_value.setText(str(data["slot"]))
+        if "part_id" in data: self.lbl_part_value.setText(str(data["part_id"]))
+        elif "part" in data: self.lbl_part_value.setText(str(data["part"]))
+
+    def on_load_complete(self): 
+        if self.current_viewing_robot:
+            self.ros_thread.send_load_done(self.current_viewing_robot)
+            self.add_log(f"명령 전송: {self.current_viewing_robot} -> /load_done True")
+            QMessageBox.information(self, "명령", "상차 완료 명령 전송")
+
+    def on_unload_complete(self): 
+        if self.current_viewing_robot:
+            self.ros_thread.send_unload_done(self.current_viewing_robot)
+            self.add_log(f"명령 전송: {self.current_viewing_robot} -> /unload_done True")
+            QMessageBox.information(self, "명령", "하차 완료 명령 전송")
+    
+    # assembly 전용 토글 - send 버튼 연결
+    def handle_send(self):
+        if not self.selected_module:
+            QMessageBox.warning(self, "오류", "모듈을 먼저 선택하세요")
+            return
+
+        module_code = self.module_map[self.selected_module]
+        # self.ros_thread.                                           # ros_thread 연결
+        self.add_log(f"{self.current_viewing_robot} -> {module_code} 명령 전송")
+        QMessageBox.information(self, "명령", f"{self.selected_module} 명령 전송 완료")
+
+    def on_slot_allocated(self, slot_id):
+        self.add_log(f"📍 빈 슬롯 찾음: {slot_id} -> 로봇팔 전송")
+        self.ros_thread.send_arm_target(slot_id)
+
+    #작업 시작 버튼 처리 함수
+    def on_start_random_assignment(self): #지니
+        assignments = self.ros_thread.assign_random_work_and_move()
+        if not assignments:
+            QMessageBox.warning(self, "오류", "업무 할당에 실패했습니다. ROS 연결 상태를 확인하세요.")
+            return
+        self.refresh_assignment_ui()
+        QMessageBox.information(self, "업무 시작", "업무 할당 완료")
+
+    # 작업 종료 버튼 처리 함수
+    def on_stop_all_assignments(self): #지니
+        move_role_keys = sorted(self.ros_thread.move_role_pubs.keys())
+        if not move_role_keys:
+            QMessageBox.warning(self, "오류", "로봇 퍼블리셔가 준비되지 않았습니다.")
+            return
+
+        for robot_key in move_role_keys:
+            robot_id = robot_key.lstrip("/")
+            self.ros_thread.send_move_role(robot_id, "0")
+
+        self.refresh_assignment_ui()
+        QMessageBox.information(self, "작업종료", "전체 로봇을 대기로 변경했습니다.")
+
+    #지니 : 메인컨트롤 상하차 버튼 관련
+    def send_done_by_role(self, role_id, done_type):
+        assignments = self.ros_thread.robot_role_assignments
+        target_robot = None
+        for robot_id, assigned_role in assignments.items():
+            if str(assigned_role) == str(role_id):
+                target_robot = robot_id
+                break
+
+        if not target_robot:
+            QMessageBox.warning(self, "오류", f"업무 {role_id}에 배정된 로봇이 없습니다.")
+            return
+
+        if done_type == "load":
+            self.ros_thread.send_load_done(target_robot)
+            self.add_log(f"[메인컨트롤] 업무 {role_id} -> {target_robot} /load_done True")
+            QMessageBox.information(self, "명령", f"{target_robot} 상차 완료 전송")
+        elif done_type == "unload":
+            self.ros_thread.send_unload_done(target_robot)
+            self.add_log(f"[메인컨트롤] 업무 {role_id} -> {target_robot} /unload_done True")
+            QMessageBox.information(self, "명령", f"{target_robot} 하차 완료 전송")
+        else:
+            QMessageBox.warning(self, "오류", f"지원하지 않는 완료 타입: {done_type}")
