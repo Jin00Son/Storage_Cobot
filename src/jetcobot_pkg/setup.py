@@ -3,6 +3,7 @@ import os
 from glob import glob
 
 package_name = 'jetcobot_pkg'
+launch_files = [f for f in glob('launch/*') if os.path.isfile(f)]
 
 setup(
     name=package_name,
@@ -12,7 +13,7 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'launch'), glob('launch/*'))
+        (os.path.join('share', package_name, 'launch'), launch_files)
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -25,7 +26,9 @@ setup(
         'console_scripts': [
             'camera_node = jetcobot_pkg.camera_node:main',
             'jetcobot_node = jetcobot_pkg.jetcobot_node:main',
-            'task_manager_node = jetcobot_pkg.task_manager_node:main'
+            'task_manager_node = jetcobot_pkg.task_manager_node:main',
+            'yolo_move_node = jetcobot_pkg.yolo_move_node:main',
+            'udp_stream_node = jetcobot_pkg.udp_stream_node:main'
         ],
     },
 )

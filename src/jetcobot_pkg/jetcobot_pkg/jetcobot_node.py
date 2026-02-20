@@ -59,10 +59,6 @@ GRIPPER_Z_OFFSET_DEG = -45.0
 GRIPPER_Y_OFFSET_MM = -10.0
 GRIPPER_Z_OFFSET_MM = 100.0
 
-# 홈 포즈(원하면 수정)
-HOME_ANGLES = [-90, 45, -90, -20, 0, 45]             # [deg, deg, deg, deg, deg, deg]
-HOME_COORDS = [ -62.8 ,  -79.6 ,  257.4 , -164.41,   15.44,  139.1 ]  # [mm, mm, mm, deg, deg, deg](Base frame)
-
 # pick/place 동작 시 안전 lift 높이 (mm) (Target frame)기준
 LIFT_MM = 50.0
 
@@ -73,17 +69,37 @@ POS_FLAG_THRESH_MM = 50.0
 POLL_DT = 0.05           # 50ms
 MOVE_TIMEOUT_SEC = 15.0  # 각 모션 최대 허용 시간(원하면 늘려도 됨)
 
-# 실제 오차값 --> 최정 보정 오차 (오차가 적용된 frame에 알맞게 값 넣기)
-OFFSET_FRAME = "Target" # OFFSET을 더해주는 기준 frame --> "Base" / "Target"
-SELF_OFFSET_X_MM = 20.0
-SELF_OFFSET_Y_MM = -3.0
-SELF_OFFSET_Z_MM = 10.0
+# HOME_ANGLES = [-90, 45, -90, -20, 0, 45]             # Aruco [deg, deg, deg, deg, deg, deg]
+# HOME_COORDS = [ -62.8 ,  -79.6 ,  257.4 , -164.41,   15.44,  139.1 ]  # Aruco [mm, mm, mm, deg, deg, deg](Base frame)
 
-# 시나리오 맞춤 고정 Z (평면 물체 집기 시나리오)
+# # ARUCO 실제 오차값 --> 최정 보정 오차 (오차가 적용된 frame에 알맞게 값 넣기)
+# OFFSET_FRAME = "Target" # OFFSET을 더해주는 기준 frame --> "Base" / "Target"
+# SELF_OFFSET_X_MM = 20.0
+# SELF_OFFSET_Y_MM = -3.0
+# SELF_OFFSET_Z_MM = 10.0
+
+# # ARUCO 시나리오 맞춤 고정 Z (평면 물체 집기 시나리오)
+# FIXED_Z = True
+# BOX1_HEIGHT = 24.5
+# BASE_HEIGHT = 2.5
+# FIXED_Z_MM = BOX1_HEIGHT - BASE_HEIGHT
+
+# 홈 포즈(원하면 수정)
+HOME_ANGLES = [-90, -30, 0, -60, 0, 45]             # Bolt [deg, deg, deg, deg, deg, deg] 
+HOME_COORDS = [-61.2, -178.8, 254.8, 177.26, -1.74, 135.9]      # Bolts [mm, mm, mm, deg, deg, deg](Base frame)
+
+# Bolts 실제 오차값 --> 최정 보정 오차 (오차가 적용된 frame에 알맞게 값 넣기)
+OFFSET_FRAME = "Base" # OFFSET을 더해주는 기준 frame --> "Base" / "Target"
+SELF_OFFSET_X_MM = -50.0
+SELF_OFFSET_Y_MM = 50.0
+SELF_OFFSET_Z_MM = 0.0
+
+# Bolts 시나리오 맞춤 고정 Z (평면 물체 집기 시나리오)
 FIXED_Z = True
-BOX1_HEIGHT = 24.5
+BOX1_HEIGHT = 22.5
 BASE_HEIGHT = 2.5
 FIXED_Z_MM = BOX1_HEIGHT - BASE_HEIGHT
+# FIXED_Z_MM = 100.0
 
 # =========================
 # ✅ Jetcobot Node

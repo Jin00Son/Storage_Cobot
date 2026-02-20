@@ -20,6 +20,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/Place.action"
   "action/MoveToPose.action"
   "msg/Part.msg"
+  "msg/YoloPose.msg"
   "msg/PartArray.msg"
   "msg/SectionResult.msg"
   "msg/StorageResponse.msg"
