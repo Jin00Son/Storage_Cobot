@@ -1,5 +1,6 @@
 import base64
 import socket
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,8 @@ from smartfactory_interfaces.msg import YoloPose
 from ultralytics import YOLO
 
 POSE_TOPIC = "/jetcobot/storage/camera/yolo_pose"
+RAW_DISPLAY_WINDOW_NAME = "YOLO UDP Pose (Raw)"
+FILTERED_DISPLAY_WINDOW_NAME = "YOLO UDP Pose (Filtered)"
 
 
 def load_intrinsics(calib_path: Path) -> tuple[np.ndarray, np.ndarray]:
@@ -210,6 +213,90 @@ def rvec_to_quaternion(rvec: np.ndarray) -> tuple[float, float, float, float]:
     return rotation_matrix_to_quaternion(rot)
 
 
+def quaternion_to_rvec(quat: np.ndarray) -> np.ndarray:
+    q = np.asarray(quat, dtype=np.float64).reshape(4)
+    norm = np.linalg.norm(q)
+    if norm <= 0.0:
+        raise ValueError("Invalid quaternion norm")
+    q = q / norm
+    x, y, z, w = q
+
+    rot = np.array(
+        [
+            [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)],
+            [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
+            [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
+        ],
+        dtype=np.float64,
+    )
+    rvec, _ = cv2.Rodrigues(rot)
+    return rvec
+
+
+def average_quaternions(quaternions: list[np.ndarray]) -> np.ndarray:
+    if not quaternions:
+        raise ValueError("Quaternion list is empty")
+
+    aligned = []
+    ref = np.asarray(quaternions[0], dtype=np.float64).reshape(4)
+    for q in quaternions:
+        qn = np.asarray(q, dtype=np.float64).reshape(4)
+        if np.dot(ref, qn) < 0.0:
+            qn = -qn
+        aligned.append(qn)
+
+    mean_q = np.mean(np.stack(aligned, axis=0), axis=0)
+    norm = np.linalg.norm(mean_q)
+    if norm <= 0.0:
+        return ref / np.linalg.norm(ref)
+    return mean_q / norm
+
+
+def draw_pose_overlay(
+    frame: np.ndarray,
+    poses: list[dict[str, Any]],
+    camera_matrix: np.ndarray,
+    dist_coeffs: np.ndarray,
+    axis_length_m: float,
+) -> np.ndarray:
+    display = frame.copy()
+
+    for pose in poses:
+        img_points = pose["img_points"].astype(np.int32).reshape(-1, 1, 2)
+        cv2.polylines(
+            display,
+            [img_points],
+            isClosed=True,
+            color=(0, 255, 255),
+            thickness=2,
+        )
+        cv2.drawFrameAxes(
+            display,
+            camera_matrix,
+            dist_coeffs,
+            pose["rvec"],
+            pose["tvec"],
+            axis_length_m,
+            2,
+        )
+
+        x, y, z = pose["xyz"]
+        label = f'{pose["label"]} x={x:.3f} y={y:.3f} z={z:.3f}'
+        text_org = tuple(img_points.reshape(-1, 2)[0])
+        cv2.putText(
+            display,
+            label,
+            (int(text_org[0]), int(text_org[1]) - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 255, 0),
+            2,
+            cv2.LINE_AA,
+        )
+
+    return display
+
+
 class YoloUdpPoseNode(Node):
     def __init__(self) -> None:
         super().__init__("yolo_udp_pose_node")
@@ -228,10 +315,13 @@ class YoloUdpPoseNode(Node):
         )
         self.declare_parameter("model_task", "obb")
         self.declare_parameter("conf_thres", 0.25)
-        self.declare_parameter("object_width_m", 0.06)
-        self.declare_parameter("object_height_m", 0.04)
+        self.declare_parameter("object_width_m", 0.04)
+        self.declare_parameter("object_height_m", 0.06)
         self.declare_parameter("topic_name", POSE_TOPIC)
         self.declare_parameter("timer_period_s", 0.01)
+        self.declare_parameter("enable_display", True)
+        self.declare_parameter("axis_length_m", 0.02)
+        self.declare_parameter("filter_buffer_size", 5)
 
         self.host_ip = str(self.get_parameter("host_ip").value)
         self.port = int(self.get_parameter("port").value)
@@ -245,6 +335,21 @@ class YoloUdpPoseNode(Node):
         self.object_height_m = float(self.get_parameter("object_height_m").value)
         self.topic_name = str(self.get_parameter("topic_name").value)
         self.timer_period_s = float(self.get_parameter("timer_period_s").value)
+        self.enable_display = bool(self.get_parameter("enable_display").value)
+        self.axis_length_m = float(self.get_parameter("axis_length_m").value)
+        self.filter_buffer_size = int(self.get_parameter("filter_buffer_size").value)
+        if self.filter_buffer_size < 1:
+            self.filter_buffer_size = 1
+            self.get_logger().warning(
+                "filter_buffer_size must be >= 1. Forced to 1."
+            )
+        self.raw_display_window_name = RAW_DISPLAY_WINDOW_NAME
+        self.filtered_display_window_name = FILTERED_DISPLAY_WINDOW_NAME
+        self.display_failed = False
+        self.display_windows_initialized = False
+        self.pose_history: dict[
+            str, deque[tuple[np.ndarray, np.ndarray]]
+        ] = {}
 
         if not self.model_path.exists():
             raise FileNotFoundError(f"Model file not found: {self.model_path}")
@@ -266,8 +371,61 @@ class YoloUdpPoseNode(Node):
 
         self.get_logger().info(
             f"YOLO UDP Pose Node started -> {self.host_ip}:{self.port}, "
-            f"topic: {self.topic_name}"
+            f"topic: {self.topic_name}, filter_buffer_size={self.filter_buffer_size}"
         )
+
+    def _filter_poses(
+        self, poses: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        filtered_poses: list[dict[str, Any]] = []
+
+        for pose in poses:
+            pose_key = f'{pose["label"]}:{int(pose["det_idx"])}'
+            tx, ty, tz = pose["xyz"]
+            quat = np.array(rvec_to_quaternion(pose["rvec"]), dtype=np.float64)
+            translation = np.array([tx, ty, tz], dtype=np.float64)
+
+            if pose_key not in self.pose_history:
+                self.pose_history[pose_key] = deque(maxlen=self.filter_buffer_size)
+
+            self.pose_history[pose_key].append((translation, quat))
+
+            history = self.pose_history[pose_key]
+            translation_stack = np.stack([item[0] for item in history], axis=0)
+            median_translation = np.median(translation_stack, axis=0)
+            avg_quat = average_quaternions([item[1] for item in history])
+
+            filtered_poses.append(
+                {
+                    **pose,
+                    "rvec": quaternion_to_rvec(avg_quat),
+                    "tvec": median_translation.reshape(3, 1),
+                    "xyz": (
+                        float(median_translation[0]),
+                        float(median_translation[1]),
+                        float(median_translation[2]),
+                    ),
+                    "quat": (
+                        float(avg_quat[0]),
+                        float(avg_quat[1]),
+                        float(avg_quat[2]),
+                        float(avg_quat[3]),
+                    ),
+                }
+            )
+
+        return filtered_poses
+
+    def _ensure_display_windows(self, frame: np.ndarray) -> None:
+        if self.display_windows_initialized:
+            return
+
+        height, width = frame.shape[:2]
+        cv2.namedWindow(self.raw_display_window_name, cv2.WINDOW_NORMAL)
+        cv2.namedWindow(self.filtered_display_window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(self.raw_display_window_name, width, height)
+        cv2.resizeWindow(self.filtered_display_window_name, width, height)
+        self.display_windows_initialized = True
 
     def _on_timer(self) -> None:
         try:
@@ -303,11 +461,12 @@ class YoloUdpPoseNode(Node):
             self.object_width_m,
             self.object_height_m,
         )
+        filtered_poses = self._filter_poses(poses)
 
-        for pose in poses:
+        for pose in filtered_poses:
             msg = YoloPose()
             tx, ty, tz = pose["xyz"]
-            qx, qy, qz, qw = rvec_to_quaternion(pose["rvec"])
+            qx, qy, qz, qw = pose["quat"]
 
             msg.part_class = str(pose["label"])
             msg.instance_id = int(pose["det_idx"])
@@ -325,14 +484,45 @@ class YoloUdpPoseNode(Node):
         if self.frame_count % 30 == 0:
             self.get_logger().info(
                 f"frame={self.frame_count}, detections={len(detections)}, "
-                f"pose_published={len(poses)}"
+                f"pose_published={len(filtered_poses)}"
             )
+
+        if self.enable_display and not self.display_failed:
+            try:
+                self._ensure_display_windows(frame)
+                raw_display = draw_pose_overlay(
+                    frame=frame,
+                    poses=poses,
+                    camera_matrix=self.camera_matrix,
+                    dist_coeffs=self.dist_coeffs,
+                    axis_length_m=self.axis_length_m,
+                )
+                filtered_display = draw_pose_overlay(
+                    frame=frame,
+                    poses=filtered_poses,
+                    camera_matrix=self.camera_matrix,
+                    dist_coeffs=self.dist_coeffs,
+                    axis_length_m=self.axis_length_m,
+                )
+                cv2.imshow(self.raw_display_window_name, raw_display)
+                cv2.imshow(self.filtered_display_window_name, filtered_display)
+                cv2.waitKey(1)
+            except cv2.error as exc:
+                self.display_failed = True
+                self.get_logger().warning(
+                    f"Display disabled (cv2.imshow error): {exc}"
+                )
 
     def destroy_node(self) -> bool:
         try:
             self.client_socket.close()
         except Exception:
             pass
+        if self.enable_display and not self.display_failed:
+            try:
+                cv2.destroyAllWindows()
+            except cv2.error:
+                pass
         return super().destroy_node()
 
 
